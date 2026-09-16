@@ -1,0 +1,79 @@
+﻿<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 사용량 대시보드</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"><img src="/logo.png" alt=""></span>
+        <div>
+          <p class="brand-name">Codex 사용량</p>
+          <p class="brand-caption">Local activity instrument</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="live-state" id="liveState"><span class="live-dot"></span><span id="liveText">연결 중</span></span>
+        <button class="refresh-button" id="refreshButton" type="button">지금 갱신</button>
+      </div>
+    </header>
+
+    <div class="notice" id="notice" role="status"></div>
+
+    <section class="overview" aria-label="사용량 개요">
+      <article class="card token-card">
+        <p class="eyebrow">Lifetime token activity</p>
+        <p class="token-value" id="lifetimeTokens"><span class="skeleton"></span></p>
+        <div class="account-block">
+          <div class="account-copy">
+            <div class="account-label">현재 계정</div>
+            <div class="account-email" id="accountEmail">불러오는 중...</div>
+          </div>
+          <span class="plan-badge" id="planType">—</span>
+        </div>
+      </article>
+
+      <article class="card quota-card">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Quota horizon</p>
+            <h1 class="section-title">남은 사용량</h1>
+            <p class="section-note">오른쪽으로 갈수록 여유가 많습니다.</p>
+          </div>
+        </div>
+        <div class="quota-list" id="quotaList">
+          <div class="empty-chart">사용량 한도를 불러오는 중입니다.</div>
+        </div>
+      </article>
+    </section>
+
+    <section class="stats" aria-label="활동 요약">
+      <article class="card stat"><div class="stat-label">하루 최고 사용량</div><p class="stat-value" id="peakDaily">—</p></article>
+      <article class="card stat"><div class="stat-label">현재 연속 사용</div><p class="stat-value" id="currentStreak">—</p></article>
+      <article class="card stat"><div class="stat-label">가장 오래 실행된 작업</div><p class="stat-value" id="longestTurn">—</p></article>
+    </section>
+
+    <section class="card chart-card" aria-labelledby="chartTitle">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">Daily signal</p>
+          <h2 class="section-title" id="chartTitle">일별 토큰 사용량</h2>
+          <p class="section-note">최근 활동 최대 30일을 비교합니다.</p>
+        </div>
+        <div class="chart-summary"><strong id="chartTotal">—</strong><span>표시 기간 합계</span></div>
+      </div>
+      <div class="chart" id="dailyChart"><div class="empty-chart">일별 통계를 불러오는 중입니다.</div></div>
+      <div class="footnote">
+        <span id="updatedAt">마지막 갱신 시각 확인 중</span>
+        <span>이 화면은 <code>127.0.0.1</code>에서만 열립니다.</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="/dashboard.js" defer></script>
+</body>
+</html>
