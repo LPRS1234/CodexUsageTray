@@ -40,7 +40,9 @@ namespace CodexUsageTray.Tests
                 AssertContains(Get(server.Url), "/dashboard.css", "HTML stylesheet reference");
                 AssertContains(Get(server.Url), "/dashboard.js", "HTML script reference");
                 AssertContains(Get(server.Url + "dashboard.css"), ".shell", "dashboard CSS");
-                AssertContains(Get(server.Url + "dashboard.js"), "loadSnapshot", "dashboard script");
+                string dashboardScript = Get(server.Url + "dashboard.js");
+                AssertContains(dashboardScript, "loadSnapshot", "dashboard script");
+                AssertContains(dashboardScript, "bar-tooltip", "daily token tooltip");
                 AssertContains(Get(server.Url + "api/snapshot"), "\"status\":\"loading\"", "snapshot API");
 
                 HttpWebRequest refreshRequest = (HttpWebRequest)WebRequest.Create(server.Url + "api/refresh");

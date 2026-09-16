@@ -309,6 +309,7 @@
       align-items: flex-end;
       height: 100%;
       min-width: 6px;
+      outline: none;
     }
 
     .bar {
@@ -321,7 +322,57 @@
       animation: rise .55s both cubic-bezier(.2, .8, .2, 1);
     }
 
-    .bar-wrap:hover .bar { opacity: 1; background: var(--mint); }
+    .bar-wrap:hover .bar,
+    .bar-wrap:focus-visible .bar { opacity: 1; background: var(--mint); }
+
+    .bar-wrap:focus-visible::after {
+      position: absolute;
+      right: -3px;
+      bottom: -4px;
+      left: -3px;
+      height: calc(var(--bar-height) + 8px);
+      border: 2px solid rgba(44, 116, 232, .45);
+      border-radius: 7px;
+      content: "";
+      pointer-events: none;
+    }
+
+    .bar-tooltip {
+      position: absolute;
+      z-index: 5;
+      bottom: min(calc(var(--bar-height) + 9px), calc(100% - 49px));
+      left: 50%;
+      display: grid;
+      gap: 3px;
+      min-width: max-content;
+      padding: 8px 10px;
+      border: 1px solid rgba(255, 255, 255, .14);
+      border-radius: 9px;
+      color: #fff;
+      background: var(--ink);
+      box-shadow: 0 8px 20px rgba(19, 34, 56, .22);
+      font-size: 12px;
+      line-height: 1.25;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 4px);
+      transition: opacity .14s ease, transform .14s ease;
+    }
+
+    .bar-tooltip::after {
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      border: 5px solid transparent;
+      border-top-color: var(--ink);
+      content: "";
+      transform: translateX(-50%);
+    }
+
+    .bar-tooltip-date { color: #aebdd0; font: 10px/1.2 Consolas, monospace; }
+    .bar-tooltip strong { font-family: Bahnschrift, "Arial Narrow", sans-serif; font-size: 14px; font-weight: 600; }
+    .bar-wrap:hover .bar-tooltip,
+    .bar-wrap:focus-visible .bar-tooltip { opacity: 1; transform: translate(-50%, 0); }
     .bar-label { position: absolute; top: calc(100% + 9px); left: 50%; color: var(--ink-soft); font: 9px/1 Consolas, monospace; transform: translateX(-50%); white-space: nowrap; }
 
     .empty-chart {

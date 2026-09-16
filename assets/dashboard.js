@@ -79,13 +79,30 @@
       visible.forEach((item, index) => {
         const wrap = document.createElement('div');
         wrap.className = 'bar-wrap';
-        wrap.title = `${item.date} · ${numberFormat.format(item.tokens)} 토큰`;
-        wrap.setAttribute('aria-label', wrap.title);
+        const tooltipId = `bar-tooltip-${index}`;
+        wrap.tabIndex = 0;
+        wrap.setAttribute('role', 'img');
+        wrap.setAttribute('aria-describedby', tooltipId);
         const bar = document.createElement('div');
         bar.className = 'bar';
-        bar.style.height = `${Math.max(2, item.tokens / max * 100)}%`;
+        const height = Math.max(2, item.tokens / max * 100);
+        wrap.style.setProperty('--bar-height', `${height}%`);
+        bar.style.height = `${height}%`;
         bar.style.animationDelay = `${index * 16}ms`;
         wrap.appendChild(bar);
+
+        const tooltip = document.createElement('span');
+        tooltip.className = 'bar-tooltip';
+        tooltip.id = tooltipId;
+        tooltip.setAttribute('role', 'tooltip');
+        const tooltipDate = document.createElement('span');
+        tooltipDate.className = 'bar-tooltip-date';
+        tooltipDate.textContent = item.date;
+        const tooltipTokens = document.createElement('strong');
+        tooltipTokens.textContent = `${numberFormat.format(item.tokens)} 토큰`;
+        tooltip.append(tooltipDate, tooltipTokens);
+        wrap.appendChild(tooltip);
+
         if (index === 0 || index === visible.length - 1 || index % 5 === 0) {
           const label = document.createElement('span');
           label.className = 'bar-label';

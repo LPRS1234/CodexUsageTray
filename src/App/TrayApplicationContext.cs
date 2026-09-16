@@ -37,18 +37,23 @@ namespace CodexUsageTray
             _refreshService = new UsageRefreshService();
             _refreshService.RefreshRequested += OnRateLimitsChanged;
 
-            _statusItem = new ToolStripMenuItem("사용량을 불러오는 중...") { Enabled = false };
+            _statusItem = new ToolStripMenuItem("사용량을 불러오는 중...")
+            {
+                Enabled = false,
+                Name = "UsageHeader"
+            };
             _detailItems = new[]
             {
-                new ToolStripMenuItem { Enabled = false, Visible = false },
-                new ToolStripMenuItem { Enabled = false, Visible = false },
-                new ToolStripMenuItem { Enabled = false, Visible = false }
+                new ToolStripMenuItem { Enabled = false, Visible = false, Name = "UsageDetail" },
+                new ToolStripMenuItem { Enabled = false, Visible = false, Name = "UsageDetail" },
+                new ToolStripMenuItem { Enabled = false, Visible = false, Name = "UsageDetail" }
             };
 
             ToolStripMenuItem refreshItem = new ToolStripMenuItem("지금 새로고침");
             refreshItem.Click += delegate { RefreshAsync(); };
 
             ToolStripMenuItem dashboardItem = new ToolStripMenuItem("대시보드로 이동");
+            dashboardItem.Name = "DashboardItem";
             dashboardItem.Font = new Font(dashboardItem.Font, FontStyle.Bold);
             dashboardItem.Click += OpenDashboard;
 
@@ -83,6 +88,7 @@ namespace CodexUsageTray
             aboutItem.Click += ShowAbout;
 
             ToolStripMenuItem exitItem = new ToolStripMenuItem("종료");
+            exitItem.Name = "ExitItem";
             exitItem.Click += delegate { ExitApplication(); };
 
             ContextMenuStrip menu = new ContextMenuStrip();
@@ -100,6 +106,8 @@ namespace CodexUsageTray
             menu.Items.Add(aboutItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(exitItem);
+            DashboardMenuRenderer menuRenderer = new DashboardMenuRenderer();
+            menuRenderer.ApplyTo(menu, 360);
             menu.Opening += delegate
             {
                 _autoStartItem.Checked = _autoStart.IsEnabled();
