@@ -17,6 +17,8 @@ namespace CodexUsageTray
         private readonly string _logoPath;
         private readonly Func<DashboardState> _getState;
         private readonly Action _requestRefresh;
+        private readonly Func<string> _getTheme;
+        private readonly Action<string> _saveTheme;
         private readonly object _gate = new object();
         private TcpListener _listener;
         private int _port;
@@ -28,7 +30,8 @@ namespace CodexUsageTray
         }
 
         public DashboardServer(string dashboardPath, string logoPath,
-            Func<DashboardState> getState, Action requestRefresh)
+            Func<DashboardState> getState, Action requestRefresh,
+            Func<string> getTheme, Action<string> saveTheme)
         {
             _dashboardPath = dashboardPath;
             string assetDirectory = Path.GetDirectoryName(dashboardPath);
@@ -37,6 +40,8 @@ namespace CodexUsageTray
             _logoPath = logoPath;
             _getState = getState;
             _requestRefresh = requestRefresh;
+            _getTheme = getTheme;
+            _saveTheme = saveTheme;
         }
 
         public void EnsureStarted()
@@ -177,6 +182,34 @@ namespace CodexUsageTray
                 return;
             }
 
+            const string ThemePathPrefix = "/api/theme/";
+            if (path.StartsWith(ThemePathPrefix, StringComparison.Ordinal) &&
+                string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                string theme = path.Substring(ThemePathPrefix.Length);
+                if (!string.Equals(theme, "light", StringComparison.Ordinal) &&
+                    !string.Equals(theme, "dark", StringComparison.Ordinal))
+                {
+                    WriteResponse(stream, 400, "Bad Request", "application/json; charset=utf-8",
+                        Encoding.UTF8.GetBytes("{\"saved\":false}"));
+                    return;
+                }
+
+                try
+                {
+                    _saveTheme(theme);
+                    WriteResponse(stream, 204, "No Content", "application/json; charset=utf-8",
+                        new byte[0]);
+                }
+                catch
+                {
+                    WriteResponse(stream, 500, "Internal Server Error",
+                        "application/json; charset=utf-8",
+                        Encoding.UTF8.GetBytes("{\"saved\":false}"));
+                }
+                return;
+            }
+
             if (string.Equals(path, "/favicon.ico", StringComparison.Ordinal))
             {
                 WriteResponse(stream, 204, "No Content", "image/x-icon", new byte[0]);
@@ -193,8 +226,25 @@ namespace CodexUsageTray
             string contentType = null;
             if (string.Equals(path, "/", StringComparison.Ordinal))
             {
-                filePath = _dashboardPath;
-                contentType = "text/html; charset=utf-8";
+                if (!File.Exists(_dashboardPath))
+                {
+                    WriteResponse(stream, 404, "Not Found", "text/plain; charset=utf-8",
+                        Encoding.UTF8.GetBytes("리소스 파일을 찾을 수 없습니다."));
+                    return true;
+                }
+
+                string dashboardHtml = File.ReadAllText(_dashboardPath, Encoding.UTF8);
+                string theme = _getTheme();
+                if (string.Equals(theme, "light", StringComparison.Ordinal) ||
+                    string.Equals(theme, "dark", StringComparison.Ordinal))
+                {
+                    dashboardHtml = dashboardHtml.Replace(
+                        "<html lang=\"ko\">",
+                        "<html lang=\"ko\" data-theme=\"" + theme + "\">");
+                }
+                WriteResponse(stream, 200, "OK", "text/html; charset=utf-8",
+                    Encoding.UTF8.GetBytes(dashboardHtml));
+                return true;
             }
             else if (string.Equals(path, "/dashboard.css", StringComparison.Ordinal))
             {

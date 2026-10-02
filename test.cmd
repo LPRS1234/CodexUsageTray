@@ -14,6 +14,10 @@ call :run_test DashboardServerSmokeTest CodexUsageTray.Tests.DashboardServerSmok
 if errorlevel 1 exit /b 1
 call :run_test UsageRefreshServiceSmokeTest CodexUsageTray.Tests.UsageRefreshServiceSmokeTest
 if errorlevel 1 exit /b 1
+call :run_test UpdateReleaseSmokeTest CodexUsageTray.Tests.UpdateReleaseSmokeTest
+if errorlevel 1 exit /b 1
+call "%PROJECT_DIR%installer\test.cmd"
+if errorlevel 1 exit /b 1
 
 echo All smoke tests passed.
 exit /b 0

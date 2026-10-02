@@ -2,6 +2,43 @@
     const compactFormat = new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 });
     const $ = id => document.getElementById(id);
 
+    function getInitialTheme() {
+      const savedTheme = document.documentElement.getAttribute('data-theme');
+      if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme;
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light';
+    }
+
+    function applyTheme(theme) {
+      const isDark = theme === 'dark';
+      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      const label = isDark ? '라이트 모드로 전환' : '다크 모드로 전환';
+      $('themeButton').setAttribute('aria-label', label);
+      $('themeButton').title = label;
+      $('themeIcon').textContent = isDark ? '☀' : '☾';
+    }
+
+    $('themeButton').addEventListener('click', async () => {
+      const button = $('themeButton');
+      const previousTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+      const nextTheme = previousTheme === 'dark' ? 'light' : 'dark';
+      applyTheme(nextTheme);
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/theme/${nextTheme}`, { method: 'POST' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        applyTheme(previousTheme);
+        $('notice').textContent = '테마 설정을 저장하지 못했습니다. 다시 시도하세요.';
+        $('notice').classList.add('visible');
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    applyTheme(getInitialTheme());
+
     function formatNumber(value) {
       return value === null || value === undefined ? '—' : numberFormat.format(value);
     }

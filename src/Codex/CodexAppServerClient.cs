@@ -123,7 +123,7 @@ namespace CodexUsageTray
                         {
                             { "name", "codex_usage_tray" },
                             { "title", "Codex Usage Tray" },
-                            { "version", "1.6.0" }
+                            { "version", typeof(Program).Assembly.GetName().Version.ToString(3) }
                         }
                     }
                 };
