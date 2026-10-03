@@ -12,6 +12,8 @@ if not exist "%CSC%" (
 )
 call :run_test DashboardServerSmokeTest CodexUsageTray.Tests.DashboardServerSmokeTest
 if errorlevel 1 exit /b 1
+call :run_test TrayMenuSmokeTest CodexUsageTray.Tests.TrayMenuSmokeTest
+if errorlevel 1 exit /b 1
 call :run_test UsageRefreshServiceSmokeTest CodexUsageTray.Tests.UsageRefreshServiceSmokeTest
 if errorlevel 1 exit /b 1
 call :run_test UpdateReleaseSmokeTest CodexUsageTray.Tests.UpdateReleaseSmokeTest

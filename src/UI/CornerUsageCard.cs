@@ -19,6 +19,8 @@ namespace CodexUsageTray
         private const int SwpShowWindow = 0x0040;
         private const int WmLButtonUp = 0x0202;
         private const int WmRButtonUp = 0x0205;
+        private const int WmLButtonDown = 0x0201;
+        private const int WmRButtonDown = 0x0204;
         private const int WmDisplayChange = 0x007E;
         private const int WmSettingChange = 0x001A;
         private const int WmDpiChanged = 0x02E0;
@@ -29,6 +31,7 @@ namespace CodexUsageTray
         private static readonly IntPtr HwndTopmost = new IntPtr(-1);
 
         private readonly ContextMenuStrip _menu;
+        private readonly int _menuWidth;
         private readonly System.Windows.Forms.Timer _positionTimer;
         private Image _logo;
         private int? _fiveHourRemaining;
@@ -36,12 +39,22 @@ namespace CodexUsageTray
         private IconState _state;
         private CardCorner _corner;
         private UsageDisplayMode _displayMode;
+        private Rectangle _cardBounds;
+        private bool _outsideClickOnCard;
+        private bool _closeMenuOnMouseUp;
         private bool _disposed;
 
         public CornerUsageCard(ContextMenuStrip menu, string logoPath, CardCorner corner,
             UsageDisplayMode displayMode)
         {
             _menu = menu;
+            _menuWidth = menu.MinimumSize.Width;
+            _menu.Opened += OnMenuOpened;
+            UsageOptionsMenu optionsMenu = menu as UsageOptionsMenu;
+            if (optionsMenu != null)
+            {
+                optionsMenu.MouseDownOutside += OnMenuMouseDownOutside;
+            }
             _corner = corner;
             _displayMode = displayMode;
             if (File.Exists(logoPath))
@@ -117,6 +130,78 @@ namespace CodexUsageTray
             {
                 UpdateLayeredBitmap(bitmap, x, y);
             }
+            _cardBounds = new Rectangle(x, y, width, height);
+            if (_menu.Visible)
+            {
+                PositionMenu();
+            }
+        }
+
+        internal static Point GetMenuLocation(Rectangle cardBounds, Size menuSize,
+            Rectangle workArea, CardCorner corner, int gap)
+        {
+            bool alignLeft = corner == CardCorner.TopLeft || corner == CardCorner.BottomLeft;
+            int x = alignLeft ? cardBounds.Left : cardBounds.Right - menuSize.Width;
+            int y = cardBounds.Top - gap - menuSize.Height;
+            if (y < workArea.Top)
+            {
+                y = cardBounds.Bottom + gap;
+            }
+
+            x = Math.Max(workArea.Left, Math.Min(x, workArea.Right - menuSize.Width));
+            y = Math.Max(workArea.Top, Math.Min(y, workArea.Bottom - menuSize.Height));
+            return new Point(x, y);
+        }
+
+        private void ShowMenu()
+        {
+            if (_menu.Visible)
+            {
+                _menu.Close();
+                return;
+            }
+
+            Rectangle workArea = Screen.FromRectangle(_cardBounds).WorkingArea;
+            int gap = (int)Math.Round(12f * GetScale());
+            ConstrainMenuSize(workArea, gap);
+            SetForegroundWindow(Handle);
+            _menu.Show(GetMenuLocation(_cardBounds, _menu.GetPreferredSize(Size.Empty),
+                workArea, _corner, gap));
+        }
+
+        private void OnMenuOpened(object sender, EventArgs e)
+        {
+            PositionMenu();
+        }
+
+        private void OnMenuMouseDownOutside(Point position)
+        {
+            _outsideClickOnCard = _cardBounds.Contains(position);
+        }
+
+        private void PositionMenu()
+        {
+            Rectangle workArea = Screen.FromRectangle(_cardBounds).WorkingArea;
+            int gap = (int)Math.Round(12f * GetScale());
+            ConstrainMenuSize(workArea, gap);
+            _menu.Location = GetMenuLocation(_cardBounds, _menu.Size, workArea, _corner, gap);
+        }
+
+        private void ConstrainMenuSize(Rectangle workArea, int gap)
+        {
+            int width = Math.Min(_menuWidth, workArea.Width);
+            int availableHeight = Math.Max(_cardBounds.Top - workArea.Top,
+                workArea.Bottom - _cardBounds.Bottom) - gap;
+            _menu.MinimumSize = new Size(width, 0);
+            _menu.MaximumSize = new Size(width, Math.Max(1, availableHeight));
+            foreach (ToolStripItem item in _menu.Items)
+            {
+                if (!item.AutoSize)
+                {
+                    item.Width = Math.Max(1, width - _menu.Padding.Horizontal);
+                }
+            }
+            _menu.PerformLayout();
         }
 
         private Bitmap RenderBitmap(int width, int height, float scale)
@@ -357,10 +442,20 @@ namespace CodexUsageTray
 
         protected override void WndProc(ref Message message)
         {
+            if (message.Msg == WmLButtonDown || message.Msg == WmRButtonDown)
+            {
+                _closeMenuOnMouseUp = _menu.Visible || _outsideClickOnCard;
+                _outsideClickOnCard = false;
+            }
             if (message.Msg == WmLButtonUp || message.Msg == WmRButtonUp)
             {
-                SetForegroundWindow(Handle);
-                _menu.Show(Cursor.Position);
+                if (_closeMenuOnMouseUp)
+                {
+                    _closeMenuOnMouseUp = false;
+                    _menu.Close();
+                    return;
+                }
+                ShowMenu();
                 return;
             }
 
@@ -382,6 +477,13 @@ namespace CodexUsageTray
             _disposed = true;
             _positionTimer.Stop();
             _positionTimer.Dispose();
+            _menu.Opened -= OnMenuOpened;
+            UsageOptionsMenu optionsMenu = _menu as UsageOptionsMenu;
+            if (optionsMenu != null)
+            {
+                optionsMenu.MouseDownOutside -= OnMenuMouseDownOutside;
+            }
+            _menu.Dispose();
             if (_logo != null)
             {
                 _logo.Dispose();

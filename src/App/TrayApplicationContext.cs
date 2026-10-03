@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
@@ -28,6 +27,8 @@ namespace CodexUsageTray
         private readonly ToolStripMenuItem _autoStartItem;
         private readonly ToolStripMenuItem[] _positionItems;
         private readonly ToolStripMenuItem[] _displayModeItems;
+        private readonly ToolStripMenuItem _positionMenu;
+        private readonly ToolStripMenuItem _displayModeMenu;
         private DashboardServer _dashboardServer;
         private CardCorner _selectedCorner;
         private UsageDisplayMode _displayMode;
@@ -59,9 +60,10 @@ namespace CodexUsageTray
             };
 
             ToolStripMenuItem refreshItem = new ToolStripMenuItem("지금 새로고침");
+            refreshItem.Name = "RefreshItem";
             refreshItem.Click += delegate { RefreshAsync(); };
 
-            ToolStripMenuItem dashboardItem = new ToolStripMenuItem("대시보드로 이동");
+            ToolStripMenuItem dashboardItem = new ToolStripMenuItem("대시보드 이동");
             dashboardItem.Name = "DashboardItem";
             dashboardItem.Font = new Font(dashboardItem.Font, FontStyle.Bold);
             dashboardItem.Click += OpenDashboard;
@@ -74,8 +76,9 @@ namespace CodexUsageTray
                 CreatePositionItem("왼쪽 아래", CardCorner.BottomLeft),
                 CreatePositionItem("오른쪽 아래", CardCorner.BottomRight)
             };
-            ToolStripMenuItem positionMenu = new ToolStripMenuItem("카드 위치");
-            positionMenu.DropDownItems.AddRange(_positionItems);
+            _positionMenu = new ToolStripMenuItem("카드 위치");
+            _positionMenu.Name = "PositionItem";
+            _positionMenu.DropDownItems.AddRange(_positionItems);
             UpdatePositionChecks();
 
             _displayMode = _settings.LoadUsageDisplayMode();
@@ -85,25 +88,34 @@ namespace CodexUsageTray
                 CreateDisplayModeItem("7일", UsageDisplayMode.SevenDays),
                 CreateDisplayModeItem("5시간 + 7일", UsageDisplayMode.Both)
             };
-            ToolStripMenuItem displayModeMenu = new ToolStripMenuItem("표시할 사용량");
-            displayModeMenu.DropDownItems.AddRange(_displayModeItems);
+            _displayModeMenu = new ToolStripMenuItem("표시할 사용량");
+            _displayModeMenu.Name = "DisplayModeItem";
+            _displayModeMenu.DropDownItems.AddRange(_displayModeItems);
             UpdateDisplayModeChecks();
 
             _autoStartItem = new ToolStripMenuItem("Windows 시작 시 자동 실행");
+            _autoStartItem.Name = "AutoStartItem";
             _autoStartItem.Checked = _autoStart.IsEnabled();
             _autoStartItem.Click += ToggleAutoStart;
 
             ToolStripMenuItem aboutItem = new ToolStripMenuItem("정보");
+            aboutItem.Name = "AboutItem";
             aboutItem.Click += ShowAbout;
 
             _updateItem = new ToolStripMenuItem("업데이트 확인");
+            _updateItem.Name = "UpdateItem";
             _updateItem.Click += delegate { CheckForUpdatesAsync(true); };
 
             ToolStripMenuItem exitItem = new ToolStripMenuItem("종료");
             exitItem.Name = "ExitItem";
             exitItem.Click += delegate { ExitApplication(); };
 
-            ContextMenuStrip menu = new ContextMenuStrip();
+            ContextMenuStrip menu = new UsageOptionsMenu();
+            menu.Items.Add(new ToolStripMenuItem("Codex 설정")
+            {
+                Enabled = false,
+                Name = "SettingsHeader"
+            });
             menu.Items.Add(_statusItem);
             foreach (ToolStripMenuItem item in _detailItems)
             {
@@ -112,15 +124,17 @@ namespace CodexUsageTray
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(dashboardItem);
             menu.Items.Add(refreshItem);
-            menu.Items.Add(displayModeMenu);
-            menu.Items.Add(positionMenu);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(_displayModeMenu);
+            menu.Items.Add(_positionMenu);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_autoStartItem);
             menu.Items.Add(_updateItem);
             menu.Items.Add(aboutItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(exitItem);
             DashboardMenuRenderer menuRenderer = new DashboardMenuRenderer();
-            menuRenderer.ApplyTo(menu, 360);
+            menuRenderer.ApplyTo(menu, 320);
             menu.Opening += delegate
             {
                 _autoStartItem.Checked = _autoStart.IsEnabled();
@@ -163,6 +177,7 @@ namespace CodexUsageTray
             if (_refreshService.LastSnapshot == null)
             {
                 _statusItem.Text = "사용량을 불러오는 중...";
+                _statusItem.Visible = true;
             }
 
             UsageRefreshResult result = await _refreshService.RefreshAsync();
@@ -279,24 +294,18 @@ namespace CodexUsageTray
                 ? (int?)null
                 : sevenDayWindow.RemainingPercent;
 
-            List<string> summary = new List<string>();
-            if (fiveHourRemaining.HasValue)
-            {
-                summary.Add("5시간 " + fiveHourRemaining.Value.ToString(CultureInfo.InvariantCulture) + "%");
-            }
-            if (sevenDayRemaining.HasValue)
-            {
-                summary.Add("7일 " + sevenDayRemaining.Value.ToString(CultureInfo.InvariantCulture) + "%");
-            }
-            _statusItem.Text = summary.Count == 0
-                ? "Codex 남은 사용량"
-                : "Codex 남은 사용량 · " + string.Join(" · ", summary);
+            _statusItem.Visible = false;
 
             for (int i = 0; i < _detailItems.Length; i++)
             {
                 if (i < snapshot.Windows.Count)
                 {
-                    _detailItems[i].Text = snapshot.Windows[i].ToDisplayText();
+                    RateLimitWindow window = snapshot.Windows[i];
+                    _detailItems[i].Text = window.DurationText + " 초기화 " +
+                        (window.ResetsAtUnixSeconds > 0
+                            ? DateTimeOffset.FromUnixTimeSeconds(window.ResetsAtUnixSeconds)
+                                .LocalDateTime.ToString("M/d HH:mm", CultureInfo.CurrentCulture)
+                            : "시각 없음");
                     _detailItems[i].Visible = true;
                 }
                 else
@@ -311,6 +320,7 @@ namespace CodexUsageTray
         private void ApplyError(string message)
         {
             _statusItem.Text = "갱신 실패: " + message;
+            _statusItem.Visible = true;
             foreach (ToolStripMenuItem item in _detailItems)
             {
                 item.Visible = false;
@@ -388,6 +398,11 @@ namespace CodexUsageTray
             foreach (ToolStripMenuItem item in _displayModeItems)
             {
                 item.Checked = (UsageDisplayMode)item.Tag == _displayMode;
+                if (item.Checked)
+                {
+                    _displayModeMenu.ShortcutKeyDisplayString = _displayMode == UsageDisplayMode.Both
+                        ? "모두" : item.Text;
+                }
             }
         }
 
@@ -427,6 +442,10 @@ namespace CodexUsageTray
             foreach (ToolStripMenuItem item in _positionItems)
             {
                 item.Checked = (CardCorner)item.Tag == _selectedCorner;
+                if (item.Checked)
+                {
+                    _positionMenu.ShortcutKeyDisplayString = item.Text;
+                }
             }
         }
 
