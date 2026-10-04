@@ -14,6 +14,7 @@ namespace CodexUsageTray
         private const int WmSettingChange = 0x001A;
         private const int WmDisplayChange = 0x007E;
         private const int WmThemeChanged = 0x031A;
+        private const int WmActivate = 0x0006;
         private readonly Panel _scrollHost;
         private readonly Panel _content;
         private readonly Panel _footer;
@@ -40,10 +41,7 @@ namespace CodexUsageTray
         private Font _captionFont;
         private Font _valueFont;
         private Font _titleFont;
-        private Icon _windowIcon;
-        private RateLimitWindow _fiveHourWindow;
-        private RateLimitWindow _sevenDayWindow;
-        private UsageDisplayMode _displayMode;
+        private Rectangle _anchor;
         private float _scale = 1f;
         private float _layoutScale = 1f;
         private int _usageTop;
@@ -53,7 +51,9 @@ namespace CodexUsageTray
         private bool _autoStartEnabled;
         private bool _positioning;
         private bool _dark;
-        private bool _wasMinimized;
+        private bool _dismissedOnAnchor;
+        private bool _deactivatedToOwnWindow;
+        private int _dismissedTick;
         private Color _surfaceColor;
         private Color _footerColor;
         private Color _textColor;
@@ -75,13 +75,11 @@ namespace CodexUsageTray
             Name = "UsagePopup";
             AccessibleName = Text;
             AccessibleRole = AccessibleRole.Dialog;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            ShowInTaskbar = true;
-            MinimizeBox = true;
-            MaximizeBox = false;
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
-            TopMost = false;
+            TopMost = true;
             KeyPreview = true;
             DoubleBuffered = true;
             MinimumSize = Size.Empty;
@@ -118,9 +116,9 @@ namespace CodexUsageTray
             _status.AccessibleRole = AccessibleRole.StaticText;
 
             _refresh.Click += delegate { Raise(RefreshRequested); };
-            _dashboard.Click += delegate { WindowState = FormWindowState.Minimized; Raise(DashboardRequested); };
+            _dashboard.Click += delegate { Hide(); Raise(DashboardRequested); };
             _autoStart.Click += delegate { Raise(AutoStartRequested); };
-            _settings.Click += delegate { Raise(SettingsRequested); };
+            _settings.Click += delegate { Hide(); Raise(SettingsRequested); };
             ApplyTheme();
             ApplyLayout(1f, new Size(360, 400));
             SetAutoStart(false);
@@ -134,19 +132,10 @@ namespace CodexUsageTray
         {
             _state = state;
             _lastUpdated = lastUpdated;
-            _fiveHourWindow = fiveHourWindow;
-            _sevenDayWindow = sevenDayWindow;
             // Server errors can contain account details. Use local, actionable status copy.
             UpdateWindow(fiveHourWindow, _fiveValue, _fiveProgress, _fiveReset);
             UpdateWindow(sevenDayWindow, _sevenValue, _sevenProgress, _sevenReset);
             UpdateStatus();
-            UpdateTaskbarIcon();
-        }
-
-        public void SetDisplayMode(UsageDisplayMode mode)
-        {
-            _displayMode = mode == UsageDisplayMode.SevenDays ? mode : UsageDisplayMode.FiveHours;
-            UpdateTaskbarIcon();
         }
 
         public void SetAutoStart(bool enabled)
@@ -169,12 +158,12 @@ namespace CodexUsageTray
         public void ShowAt(Rectangle anchor)
         {
             if (IsDisposed) return;
-            _wasMinimized = false;
+            _dismissedOnAnchor = false;
+            _anchor = anchor;
             Screen screen = Screen.FromRectangle(anchor);
             _positioning = true;
             try
             {
-                WindowState = FormWindowState.Normal;
                 ApplyTheme();
                 ApplyLayout(GetMonitorScale(anchor), screen.WorkingArea.Size);
                 Bounds = CalculateBounds(anchor, Size, screen.WorkingArea, Scale(12));
@@ -189,45 +178,68 @@ namespace CodexUsageTray
             }
         }
 
+        public void ToggleAt(Rectangle anchor)
+        {
+            if (Visible)
+            {
+                _dismissedOnAnchor = false;
+                Hide();
+                return;
+            }
+            int elapsed = unchecked(Environment.TickCount - _dismissedTick);
+            bool sameClick = _dismissedOnAnchor && anchor.IntersectsWith(_anchor) &&
+                elapsed >= 0 && elapsed <= SystemInformation.DoubleClickTime;
+            _dismissedOnAnchor = false;
+            if (!sameClick) ShowAt(anchor);
+        }
+
+        internal void DismissForDeactivation(Point cursor)
+        {
+            DismissFromActivation(cursor, false);
+        }
+
+        private void DismissFromActivation(Point cursor, bool ownWindowActivated)
+        {
+            if (!Visible) return;
+            _dismissedOnAnchor = _anchor.Contains(cursor) || ownWindowActivated;
+            _dismissedTick = Environment.TickCount;
+            Hide();
+        }
+
+        protected override void OnDeactivate(EventArgs e)
+        {
+            base.OnDeactivate(e);
+            DismissFromActivation(Cursor.Position, _deactivatedToOwnWindow);
+        }
+
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);
             if (_freshnessTimer == null) return;
-            _freshnessTimer.Enabled = Visible && WindowState != FormWindowState.Minimized;
+            _freshnessTimer.Enabled = Visible;
             if (Visible) UpdateStatus();
-        }
-
-        protected override void OnResize(EventArgs e)
-        {
-            base.OnResize(e);
-            if (_content == null || _positioning) return;
-            bool minimized = WindowState == FormWindowState.Minimized;
-            if (_freshnessTimer != null) _freshnessTimer.Enabled = Visible && !minimized;
-            if (minimized)
-            {
-                _wasMinimized = true;
-                return;
-            }
-            if (!_wasMinimized) return;
-            _wasMinimized = false;
-            _positioning = true;
-            try
-            {
-                ApplyTheme();
-                UpdateWindowLayout(GetMonitorScale(Bounds));
-            }
-            finally { _positioning = false; }
         }
 
         protected override bool ProcessCmdKey(ref Message message, Keys keyData)
         {
             if (keyData == Keys.Escape)
             {
-                WindowState = FormWindowState.Minimized;
+                _dismissedOnAnchor = false;
+                Hide();
                 Raise(KeyboardDismissed);
                 return true;
             }
             return base.ProcessCmdKey(ref message, keyData);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                Hide();
+            }
+            base.OnFormClosing(e);
         }
 
         protected override CreateParams CreateParams
@@ -235,7 +247,7 @@ namespace CodexUsageTray
             get
             {
                 CreateParams parameters = base.CreateParams;
-                parameters.ExStyle &= ~0x00000080; // Keep the normal taskbar and Alt+Tab entry.
+                parameters.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
                 parameters.ClassStyle |= 0x00020000; // CS_DROPSHADOW fallback
                 return parameters;
             }
@@ -250,37 +262,37 @@ namespace CodexUsageTray
         protected override void WndProc(ref Message message)
         {
             int kind = message.Msg;
+            if (kind == WmActivate && (message.WParam.ToInt64() & 0xffff) == 0)
+            {
+                uint processId;
+                GetWindowThreadProcessId(message.LParam, out processId);
+                _deactivatedToOwnWindow = processId != 0 && processId == GetCurrentProcessId();
+            }
             base.WndProc(ref message);
+            if (kind == WmActivate) _deactivatedToOwnWindow = false;
             if (_content == null || _positioning) return;
-            if (kind == WmDpiChanged && Visible && WindowState != FormWindowState.Minimized)
+            if (kind == WmDpiChanged && Visible)
             {
                 _positioning = true;
                 try
                 {
+                    Rectangle workArea = Screen.FromRectangle(_anchor).WorkingArea;
                     int dpi = (int)(message.WParam.ToInt64() & 0xffff);
-                    UpdateWindowLayout(dpi > 0 ? dpi / 96f : GetMonitorScale(Bounds));
+                    ApplyLayout(dpi > 0 ? dpi / 96f : GetMonitorScale(_anchor), workArea.Size);
+                    Bounds = CalculateBounds(_anchor, Size, workArea, Scale(12));
                 }
                 finally { _positioning = false; }
             }
             else if (kind == WmSettingChange || kind == WmThemeChanged || kind == WmDisplayChange)
             {
                 ApplyTheme();
-                if (Visible && WindowState != FormWindowState.Minimized)
+                if (Visible)
                 {
-                    _positioning = true;
-                    try { UpdateWindowLayout(GetMonitorScale(Bounds)); }
-                    finally { _positioning = false; }
+                    Rectangle workArea = Screen.FromRectangle(_anchor).WorkingArea;
+                    ApplyLayout(GetMonitorScale(_anchor), workArea.Size);
+                    Bounds = CalculateBounds(_anchor, Size, workArea, Scale(12));
                 }
             }
-        }
-
-        private void UpdateWindowLayout(float scale)
-        {
-            Rectangle workArea = Screen.FromRectangle(Bounds).WorkingArea;
-            Point location = Location;
-            ApplyLayout(scale, workArea.Size);
-            Location = new Point(Math.Max(workArea.Left, Math.Min(location.X, workArea.Right - Width)),
-                Math.Max(workArea.Top, Math.Min(location.Y, workArea.Bottom - Height)));
         }
 
         internal static Rectangle CalculateBounds(Rectangle anchor, Size desiredSize,
@@ -302,9 +314,8 @@ namespace CodexUsageTray
         internal void ApplyLayout(float scale, Size availableSize)
         {
             _scale = Math.Max(0.75f, Math.Min(4f, scale));
-            Size frame = SizeFromClientSize(Size.Empty);
-            int width = Math.Max(1, Math.Min(Scale(360), availableSize.Width - frame.Width));
-            int height = Math.Max(1, Math.Min(Scale(400), availableSize.Height - frame.Height));
+            int width = Math.Max(1, Math.Min(Scale(360), availableSize.Width));
+            int height = Math.Max(1, Math.Min(Scale(400), availableSize.Height));
             // Small working areas use a compact layout and vertical scrolling instead of clipping.
             float layoutScale = Math.Min(_scale, Math.Max(0.5f, (width - 2f) / 280f));
             int contentHeight = (int)Math.Round(398f * layoutScale);
@@ -389,34 +400,6 @@ namespace CodexUsageTray
             // WinForms retains the existing Font when an equal Font is assigned.
             if (current != null && current.Size == size) return current;
             return new Font(family, size, FontStyle.Regular, GraphicsUnit.Pixel);
-        }
-
-        private void UpdateTaskbarIcon()
-        {
-            if (IsDisposed) return;
-            int? five = _fiveHourWindow == null ? (int?)null : _fiveHourWindow.RemainingPercent;
-            int? seven = _sevenDayWindow == null ? (int?)null : _sevenDayWindow.RemainingPercent;
-            string value = NumericTrayIcon.FormatIconText(five, seven, _displayMode, _state);
-            Text = "Codex 사용량 · " + (_displayMode == UsageDisplayMode.SevenDays ? "7일 " : "5시간 ") +
-                value + ((_state == IconState.Normal || _state == IconState.Stale) && value != "-" ? "% 남음" : "");
-            AccessibleName = Text;
-            using (Bitmap bitmap = NumericTrayIcon.RenderBitmap(32, five, seven, _displayMode,
-                _state, NumericTrayIcon.IsLightTaskbar()))
-            {
-                IntPtr handle = bitmap.GetHicon();
-                try
-                {
-                    using (Icon source = System.Drawing.Icon.FromHandle(handle))
-                    {
-                        Icon next = (Icon)source.Clone();
-                        Icon previous = _windowIcon;
-                        Icon = next;
-                        _windowIcon = next;
-                        if (previous != null) previous.Dispose();
-                    }
-                }
-                finally { DestroyIcon(handle); }
-            }
         }
 
         private void UpdateWindow(RateLimitWindow window, Label value, UsageProgressBar progress, Label reset)
@@ -521,7 +504,6 @@ namespace CodexUsageTray
             _sevenProgress.ForeColor = _sevenProgress.Value <= 15 ? _warningColor : _accentColor;
             ApplyButtonColors();
             UpdateStatus();
-            UpdateTaskbarIcon();
             if (IsHandleCreated) ApplyWindowAppearance();
             Invalidate(true);
         }
@@ -635,7 +617,6 @@ namespace CodexUsageTray
                 if (_captionFont != null) _captionFont.Dispose();
                 if (_valueFont != null) _valueFont.Dispose();
                 if (_titleFont != null) _titleFont.Dispose();
-                if (_windowIcon != null) { _windowIcon.Dispose(); _windowIcon = null; }
             }
         }
 
@@ -656,7 +637,9 @@ namespace CodexUsageTray
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")]
-        private static extern bool DestroyIcon(IntPtr icon);
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentProcessId();
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
 

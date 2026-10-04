@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -23,10 +22,9 @@ namespace CodexUsageTray.Tests
                 Assert(popupType != null, "usage flyout is missing");
                 VerifyRepeatedLayoutAndPainting(popupType);
                 VerifyValuesAndActions(popupType);
-                VerifyTaskbarIconResources(popupType);
                 VerifyPlacement(popupType);
-                VerifyTaskbarLifecycle(popupType);
-                VerifyApplicationShutdown();
+                VerifyDismissalAndReopening(popupType);
+                VerifyTrayApplicationLifecycle();
                 Console.WriteLine("Usage popup smoke test passed.");
                 return 0;
             }
@@ -56,7 +54,7 @@ namespace CodexUsageTray.Tests
                 {
                     Invoke(popup, "ShowAt", anchor);
                     VerifyLabelPainting(popup);
-                    using (Bitmap bitmap = new Bitmap(popup.Width, popup.Height))
+                    using (Bitmap bitmap = new Bitmap(popup.ClientSize.Width, popup.ClientSize.Height))
                     {
                         popup.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
                     }
@@ -83,9 +81,8 @@ namespace CodexUsageTray.Tests
         {
             using (Form popup = CreatePopup(popupType))
             {
-                Assert(popup.ShowInTaskbar && popup.FormBorderStyle == FormBorderStyle.FixedSingle &&
-                    popup.MinimizeBox && !popup.MaximizeBox && !popup.TopMost,
-                    "usage window must provide a normal taskbar button and window controls");
+                Assert(!popup.ShowInTaskbar && popup.FormBorderStyle == FormBorderStyle.None,
+                    "flyout should not create a taskbar button or window frame");
                 Assert(Find(popup, "FiveHourValue").Text == "--" &&
                     Find(popup, "SevenDayValue").Text == "--", "missing values must stay unknown");
                 Assert(Find(popup, "FiveHourProgress") is ProgressBar &&
@@ -96,11 +93,6 @@ namespace CodexUsageTray.Tests
                 RateLimitWindow five = new RateLimitWindow("synthetic", "primary", 78, 300, reset);
                 RateLimitWindow seven = new RateLimitWindow("synthetic", "secondary", 64, 10080, reset);
                 Invoke(popup, "UpdateUsage", five, seven, IconState.Normal, "", successfulUpdate);
-                Assert(popup.Icon != null && popup.Text.Contains("5시간 78%"),
-                    "taskbar icon and title must show the selected remaining usage");
-                Invoke(popup, "SetDisplayMode", UsageDisplayMode.SevenDays);
-                Assert(popup.Text.Contains("7일 64%"), "taskbar display must follow the selected period");
-                Invoke(popup, "SetDisplayMode", UsageDisplayMode.FiveHours);
                 Assert(Find(popup, "FiveHourValue").Text == "78%" &&
                     Find(popup, "SevenDayValue").Text == "64%", "both remaining usage windows must be visible");
                 Assert(((ProgressBar)Find(popup, "FiveHourProgress")).Value == 78 &&
@@ -152,32 +144,10 @@ namespace CodexUsageTray.Tests
                     "dark theme must use the approved accessible blue accent");
                 SavePreview(popup, "usage-popup-dark-synthetic.png");
                 Click(popup, "DashboardButton");
-                Assert(dashboard == 1 && popup.Visible && popup.WindowState == FormWindowState.Minimized,
-                    "dashboard action must minimize while preserving the taskbar button");
+                Assert(dashboard == 1 && !popup.Visible, "dashboard action must dismiss the flyout");
                 Invoke(popup, "ShowAt", new Rectangle(workArea.Right - 28, workArea.Bottom, 24, 24));
                 Click(popup, "SettingsButton");
-                Assert(settings == 1 && popup.Visible && popup.WindowState == FormWindowState.Normal,
-                    "settings action must preserve the usage window");
-            }
-        }
-
-        private static void VerifyTaskbarIconResources(Type popupType)
-        {
-            using (Form popup = CreatePopup(popupType))
-            {
-                RateLimitWindow five = new RateLimitWindow("synthetic", "primary", 78, 300, 0);
-                RateLimitWindow seven = new RateLimitWindow("synthetic", "secondary", 64, 10080, 0);
-                Invoke(popup, "UpdateUsage", five, seven, IconState.Normal, "", DateTime.Now);
-                uint baselineUser = GetGuiResources(Process.GetCurrentProcess().Handle, 1);
-                uint baselineGdi = GetGuiResources(Process.GetCurrentProcess().Handle, 0);
-                for (int index = 0; index < 80; index++)
-                {
-                    Invoke(popup, "SetDisplayMode", index % 2 == 0 ? UsageDisplayMode.FiveHours : UsageDisplayMode.SevenDays);
-                    Invoke(popup, "UpdateUsage", five, seven, IconState.Stale, "synthetic failure", DateTime.Now);
-                }
-                Assert(GetGuiResources(Process.GetCurrentProcess().Handle, 1) <= baselineUser + 6 &&
-                    GetGuiResources(Process.GetCurrentProcess().Handle, 0) <= baselineGdi + 6,
-                    "repeated taskbar icon changes must release native icon and drawing resources");
+                Assert(settings == 1 && !popup.Visible, "settings action must dismiss the flyout");
             }
         }
 
@@ -246,7 +216,7 @@ namespace CodexUsageTray.Tests
             }
         }
 
-        private static void VerifyTaskbarLifecycle(Type popupType)
+        private static void VerifyDismissalAndReopening(Type popupType)
         {
             using (Form popup = CreatePopup(popupType))
             {
@@ -254,50 +224,74 @@ namespace CodexUsageTray.Tests
                 Subscribe(popup, "KeyboardDismissed", delegate { keyboardDismissals++; });
                 Rectangle workArea = Screen.PrimaryScreen.WorkingArea;
                 Rectangle anchor = new Rectangle(workArea.Right - 28, workArea.Bottom, 24, 24);
-                Invoke(popup, "ShowAt", anchor);
+                Invoke(popup, "ToggleAt", anchor);
                 Application.DoEvents();
-                Assert(popup.Visible && workArea.Contains(popup.Bounds), "usage window must fit the working area");
-                int extendedStyle = GetWindowLong(popup.Handle, -20);
-                Assert((extendedStyle & 0x00000080) == 0 && (extendedStyle & 0x00040000) != 0,
-                    "native window must be eligible for the taskbar and Alt+Tab");
-                SendMessage(popup.Handle, 0x0006, IntPtr.Zero, IntPtr.Zero);
-                Assert(popup.Visible && popup.WindowState == FormWindowState.Normal,
-                    "deactivation must not remove the usage window or its taskbar button");
-                Rectangle normalBounds = popup.Bounds;
-                popup.WindowState = FormWindowState.Minimized;
-                Application.DoEvents();
-                SendMessage(popup.Handle, 0x031A, IntPtr.Zero, IntPtr.Zero);
-                Assert(popup.Visible && popup.ShowInTaskbar && popup.WindowState == FormWindowState.Minimized,
-                    "minimizing and theme changes must preserve the taskbar button");
-                Assert(popup.RestoreBounds == normalBounds, "minimized theme changes must preserve restore bounds");
-                popup.WindowState = FormWindowState.Normal;
-                Application.DoEvents();
-                VerifyLabelPainting(popup);
-                Assert(popup.Visible && workArea.Contains(popup.Bounds), "restoring must reopen the usage window");
+                Assert(popup.Visible && workArea.Contains(popup.Bounds), "first tray click must open flyout");
+                Invoke(popup, "ToggleAt", anchor);
+                Assert(!popup.Visible, "second tray click must close flyout");
+                Invoke(popup, "ToggleAt", anchor);
+                Invoke(popup, "DismissForDeactivation", new Point(anchor.Left + 2, anchor.Top + 2));
+                Assert(!popup.Visible, "deactivation must hide flyout");
+                Invoke(popup, "ToggleAt", anchor);
+                Assert(!popup.Visible, "tray callback following deactivation must not reopen flyout");
+                Invoke(popup, "ToggleAt", anchor);
+                Assert(popup.Visible, "subsequent click must reopen flyout");
+                using (Form nativeTrayWindow = new Form())
+                {
+                    SendMessage(popup.Handle, 0x0006, IntPtr.Zero, nativeTrayWindow.Handle);
+                    Assert(!popup.Visible, "native tray window activation must hide flyout");
+                    Invoke(popup, "ToggleAt", anchor);
+                    Assert(!popup.Visible, "keyboard tray callback must not reopen the deactivated flyout");
+                    Invoke(popup, "ToggleAt", anchor);
+                    Assert(popup.Visible, "keyboard tray selection must reopen on the next action");
+                }
                 Message key = Message.Create(popup.Handle, 0x0100, new IntPtr((int)Keys.Escape), IntPtr.Zero);
                 object[] arguments = new object[] { key, Keys.Escape };
                 popupType.GetMethod("ProcessCmdKey", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(popup, arguments);
-                Assert(popup.Visible && popup.WindowState == FormWindowState.Minimized && keyboardDismissals == 1,
-                    "Escape must minimize while preserving the taskbar button");
+                Assert(!popup.Visible && keyboardDismissals == 1,
+                    "Escape must dismiss flyout and request keyboard focus restoration");
                 Invoke(popup, "ShowAt", anchor);
+                Invoke(popup, "DismissForDeactivation", new Point(workArea.Left, workArea.Top));
+                Invoke(popup, "ToggleAt", anchor);
+                Assert(popup.Visible, "outside-click dismissal must allow immediate reopening");
                 popup.Close();
-                Assert(popup.IsDisposed, "closing the usage window must dispose it");
+                Assert(!popup.IsDisposed && !popup.Visible, "user dismissal must preserve the reusable flyout");
             }
         }
 
-        private static void VerifyApplicationShutdown()
+        private static void VerifyTrayApplicationLifecycle()
         {
             using (TrayApplicationContext context = new TrayApplicationContext())
             {
                 bool exited = false;
                 context.ThreadExit += delegate { exited = true; };
-                Form window = Application.OpenForms["UsagePopup"];
-                Assert(window != null && window.ShowInTaskbar && window.Visible,
-                    "application must expose its usage window on the taskbar at startup");
-                window.Close();
-                Assert(exited && window.IsDisposed,
-                    "closing the usage window must stop the application context");
+                Type contextType = context.GetType();
+                Form popup = (Form)contextType.GetField("_popup", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .GetValue(context);
+                Assert(!popup.ShowInTaskbar && !popup.Visible,
+                    "startup must not open a normal taskbar window");
+                FieldInfo iconField = contextType.GetField("_trayIcon", BindingFlags.Instance | BindingFlags.NonPublic);
+                NativeWindow icon = iconField == null ? null : (NativeWindow)iconField.GetValue(context);
+                Assert(icon != null, "application must provide its notification-area icon");
+                NotifyIconIdentifier identifier = new NotifyIconIdentifier();
+                identifier.Size = (uint)Marshal.SizeOf(typeof(NotifyIconIdentifier));
+                identifier.Window = icon.Handle;
+                identifier.Id = 1;
+                NativeRectangle rectangle;
+                Assert(Shell_NotifyIconGetRect(ref identifier, out rectangle) == 0,
+                    "application icon must be registered in the notification area");
+                SendMessage(icon.Handle, 0x8001, IntPtr.Zero, new IntPtr((1 << 16) | 0x0400));
+                Assert(popup.Visible && !popup.ShowInTaskbar,
+                    "notification-area activation must open the popup without a taskbar app button");
+                popup.Close();
+                Assert(!popup.IsDisposed && !popup.Visible && !exited,
+                    "closing the popup must keep the tray application running");
+                ContextMenuStrip menu = (ContextMenuStrip)contextType.GetField("_menu",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(context);
+                ((ToolStripMenuItem)menu.Items["ExitItem"]).PerformClick();
+                Assert(exited && popup.IsDisposed && Shell_NotifyIconGetRect(ref identifier, out rectangle) != 0,
+                    "exit menu must stop the application and remove its notification-area icon");
             }
         }
 
@@ -335,7 +329,7 @@ namespace CodexUsageTray.Tests
             string directory = Environment.GetEnvironmentVariable("CODEX_USAGE_POPUP_PREVIEW_DIR");
             if (string.IsNullOrEmpty(directory)) return;
             Directory.CreateDirectory(directory);
-            using (Bitmap bitmap = new Bitmap(popup.Width, popup.Height))
+            using (Bitmap bitmap = new Bitmap(popup.ClientSize.Width, popup.ClientSize.Height))
             {
                 popup.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
                 bitmap.Save(Path.Combine(directory, fileName), ImageFormat.Png);
@@ -350,10 +344,23 @@ namespace CodexUsageTray.Tests
         [DllImport("user32.dll")]
         private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
-        [DllImport("user32.dll")]
-        private static extern int GetWindowLong(IntPtr window, int index);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NotifyIconIdentifier
+        {
+            public uint Size;
+            public IntPtr Window;
+            public uint Id;
+            public Guid Guid;
+        }
 
-        [DllImport("user32.dll")]
-        private static extern uint GetGuiResources(IntPtr process, uint flags);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeRectangle
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        [DllImport("shell32.dll")]
+        private static extern int Shell_NotifyIconGetRect(ref NotifyIconIdentifier identifier,
+            out NativeRectangle rectangle);
     }
 }
