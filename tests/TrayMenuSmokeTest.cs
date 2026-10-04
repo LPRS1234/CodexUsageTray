@@ -233,6 +233,8 @@ namespace CodexUsageTray.Tests
         {
             using (UsageOptionsMenu menu = new UsageOptionsMenu())
             {
+                int keyboardDismissals = 0;
+                menu.KeyboardDismissed += delegate { keyboardDismissals++; };
                 menu.Items.Add(new ToolStripMenuItem("지금 새로고침"));
                 ToolStripMenuItem selector = new ToolStripMenuItem("표시할 사용량");
                 ToolStripMenuItem option = new ToolStripMenuItem("7일");
@@ -270,6 +272,10 @@ namespace CodexUsageTray.Tests
                         if (menu.Visible)
                         {
                             throw new InvalidOperationException("Smoke test failed: Escape did not dismiss opened panel.");
+                        }
+                        if (keyboardDismissals != (selectOption ? 2 : 1))
+                        {
+                            throw new InvalidOperationException("Smoke test failed: keyboard dismissal notification missing.");
                         }
                     }
                 }

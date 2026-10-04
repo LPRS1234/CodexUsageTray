@@ -6,8 +6,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyDescription("Codex remaining usage indicator for the Windows notification area")]
 [assembly: System.Reflection.AssemblyCompany("Local")]
 [assembly: System.Reflection.AssemblyProduct("Codex Usage Tray")]
-[assembly: System.Reflection.AssemblyVersion("1.7.2.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.7.2.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.3.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.7.3.0")]
 
 namespace CodexUsageTray
 {

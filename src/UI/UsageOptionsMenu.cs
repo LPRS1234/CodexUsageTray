@@ -12,6 +12,7 @@ namespace CodexUsageTray
         private bool _closePending;
 
         internal event Action<Point> MouseDownOutside;
+        internal event EventHandler KeyboardDismissed;
 
         public UsageOptionsMenu()
         {
@@ -49,6 +50,8 @@ namespace CodexUsageTray
             if (keyData == Keys.Escape)
             {
                 Close();
+                EventHandler handler = KeyboardDismissed;
+                if (handler != null) handler(this, EventArgs.Empty);
                 return true;
             }
             return base.ProcessCmdKey(ref message, keyData);

@@ -13,7 +13,9 @@ namespace CodexUsageTray
     {
         private const int RefreshIntervalMilliseconds = 10000;
 
-        private readonly CornerUsageCard _widget;
+        private readonly NumericTrayIcon _trayIcon;
+        private readonly UsagePopupForm _popup;
+        private readonly ContextMenuStrip _menu;
         private readonly System.Windows.Forms.Timer _refreshTimer;
         private readonly System.Windows.Forms.Timer _updateTimer;
         private readonly Control _dispatcher;
@@ -25,13 +27,11 @@ namespace CodexUsageTray
         private readonly ToolStripMenuItem _statusItem;
         private readonly ToolStripMenuItem[] _detailItems;
         private readonly ToolStripMenuItem _autoStartItem;
-        private readonly ToolStripMenuItem[] _positionItems;
         private readonly ToolStripMenuItem[] _displayModeItems;
-        private readonly ToolStripMenuItem _positionMenu;
         private readonly ToolStripMenuItem _displayModeMenu;
         private DashboardServer _dashboardServer;
-        private CardCorner _selectedCorner;
         private UsageDisplayMode _displayMode;
+        private DateTime? _lastSuccessfulUpdate;
         private volatile string _dashboardTheme;
         private bool _exiting;
         private bool _checkingForUpdate;
@@ -68,27 +68,17 @@ namespace CodexUsageTray
             dashboardItem.Font = new Font(dashboardItem.Font, FontStyle.Bold);
             dashboardItem.Click += OpenDashboard;
 
-            _selectedCorner = _settings.LoadCardCorner();
-            _positionItems = new[]
-            {
-                CreatePositionItem("왼쪽 위", CardCorner.TopLeft),
-                CreatePositionItem("오른쪽 위", CardCorner.TopRight),
-                CreatePositionItem("왼쪽 아래", CardCorner.BottomLeft),
-                CreatePositionItem("오른쪽 아래", CardCorner.BottomRight)
-            };
-            _positionMenu = new ToolStripMenuItem("카드 위치");
-            _positionMenu.Name = "PositionItem";
-            _positionMenu.DropDownItems.AddRange(_positionItems);
-            UpdatePositionChecks();
-
             _displayMode = _settings.LoadUsageDisplayMode();
+            if (_displayMode != UsageDisplayMode.SevenDays)
+            {
+                _displayMode = UsageDisplayMode.FiveHours;
+            }
             _displayModeItems = new[]
             {
                 CreateDisplayModeItem("5시간", UsageDisplayMode.FiveHours),
-                CreateDisplayModeItem("7일", UsageDisplayMode.SevenDays),
-                CreateDisplayModeItem("5시간 + 7일", UsageDisplayMode.Both)
+                CreateDisplayModeItem("7일", UsageDisplayMode.SevenDays)
             };
-            _displayModeMenu = new ToolStripMenuItem("표시할 사용량");
+            _displayModeMenu = new ToolStripMenuItem("아이콘에 표시할 사용량");
             _displayModeMenu.Name = "DisplayModeItem";
             _displayModeMenu.DropDownItems.AddRange(_displayModeItems);
             UpdateDisplayModeChecks();
@@ -110,7 +100,7 @@ namespace CodexUsageTray
             exitItem.Name = "ExitItem";
             exitItem.Click += delegate { ExitApplication(); };
 
-            ContextMenuStrip menu = new UsageOptionsMenu();
+            UsageOptionsMenu menu = new UsageOptionsMenu();
             menu.Items.Add(new ToolStripMenuItem("Codex 설정")
             {
                 Enabled = false,
@@ -126,7 +116,6 @@ namespace CodexUsageTray
             menu.Items.Add(refreshItem);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_displayModeMenu);
-            menu.Items.Add(_positionMenu);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_autoStartItem);
             menu.Items.Add(_updateItem);
@@ -138,13 +127,38 @@ namespace CodexUsageTray
             menu.Opening += delegate
             {
                 _autoStartItem.Checked = _autoStart.IsEnabled();
-                UpdatePositionChecks();
                 UpdateDisplayModeChecks();
             };
+            _menu = menu;
+            menu.KeyboardDismissed += delegate { _trayIcon.RestoreFocus(); };
+
+            _popup = new UsagePopupForm();
+            _popup.RefreshRequested += delegate { RefreshAsync(); };
+            _popup.DashboardRequested += OpenDashboard;
+            _popup.AutoStartRequested += ToggleAutoStart;
+            _popup.SettingsRequested += delegate
+            {
+                ShowOptionsMenu(new Rectangle(_popup.Right - 1, _popup.Bottom - 1, 1, 1));
+            };
+            _popup.KeyboardDismissed += delegate { _trayIcon.RestoreFocus(); };
+            _popup.SetAutoStart(_autoStartItem.Checked);
+            _popup.UpdateUsage(null, null, IconState.Loading, null, null);
+
+            _trayIcon = new NumericTrayIcon(_displayMode);
+            _trayIcon.LeftClick += delegate(Rectangle anchor)
+            {
+                _menu.Close();
+                _popup.SetAutoStart(_autoStart.IsEnabled());
+                _popup.ToggleAt(anchor);
+                if (!_popup.Visible)
+                {
+                    _trayIcon.RestoreFocus();
+                }
+            };
+            _trayIcon.RightClick += ShowOptionsMenu;
+            _trayIcon.Update(null, null, IconState.Loading);
 
             string logoPath = Path.Combine(Application.StartupPath, "assets", "codex-terminal.png");
-            _widget = new CornerUsageCard(menu, logoPath, _selectedCorner, _displayMode);
-            _widget.Update(null, null, IconState.Loading);
 
             string dashboardPath = Path.Combine(Application.StartupPath, "assets", "dashboard.html");
             _dashboardServer = new DashboardServer(
@@ -180,11 +194,17 @@ namespace CodexUsageTray
                 _statusItem.Visible = true;
             }
 
+            _popup.SetRefreshing(true);
             UsageRefreshResult result = await _refreshService.RefreshAsync();
+            if (_exiting)
+            {
+                return;
+            }
             if (result == null)
             {
                 return;
             }
+            _popup.SetRefreshing(false);
 
             if (result.Succeeded)
             {
@@ -194,6 +214,13 @@ namespace CodexUsageTray
             {
                 ApplyError(result.ErrorMessage);
             }
+        }
+
+        private void ShowOptionsMenu(Rectangle anchor)
+        {
+            _popup.Hide();
+            _menu.Close();
+            _menu.Show(new Point(anchor.Right, anchor.Top), ToolStripDropDownDirection.AboveLeft);
         }
 
         private void OpenDashboard(object sender, EventArgs e)
@@ -301,7 +328,8 @@ namespace CodexUsageTray
                 if (i < snapshot.Windows.Count)
                 {
                     RateLimitWindow window = snapshot.Windows[i];
-                    _detailItems[i].Text = window.DurationText + " 초기화 " +
+                    _detailItems[i].Text = window.DurationText + " " +
+                        window.RemainingPercent.ToString(CultureInfo.InvariantCulture) + "% 남음 · 초기화 " +
                         (window.ResetsAtUnixSeconds > 0
                             ? DateTimeOffset.FromUnixTimeSeconds(window.ResetsAtUnixSeconds)
                                 .LocalDateTime.ToString("M/d HH:mm", CultureInfo.CurrentCulture)
@@ -314,7 +342,10 @@ namespace CodexUsageTray
                 }
             }
 
-            _widget.Update(fiveHourRemaining, sevenDayRemaining, IconState.Normal);
+            _lastSuccessfulUpdate = DateTime.Now;
+            _trayIcon.Update(fiveHourRemaining, sevenDayRemaining, IconState.Normal);
+            _popup.UpdateUsage(fiveHourWindow, sevenDayWindow, IconState.Normal,
+                null, _lastSuccessfulUpdate);
         }
 
         private void ApplyError(string message)
@@ -329,16 +360,19 @@ namespace CodexUsageTray
             RateLimitSnapshot lastSnapshot = _refreshService.LastSnapshot;
             if (lastSnapshot == null)
             {
-                _widget.Update(null, null, IconState.Error);
+                _trayIcon.Update(null, null, IconState.Error);
+                _popup.UpdateUsage(null, null, IconState.Error, message, _lastSuccessfulUpdate);
             }
             else
             {
                 RateLimitWindow fiveHourWindow = lastSnapshot.GetFiveHourWindow();
                 RateLimitWindow sevenDayWindow = lastSnapshot.GetSevenDayWindow();
-                _widget.Update(
+                _trayIcon.Update(
                     fiveHourWindow == null ? (int?)null : fiveHourWindow.RemainingPercent,
                     sevenDayWindow == null ? (int?)null : sevenDayWindow.RemainingPercent,
                     IconState.Stale);
+                _popup.UpdateUsage(fiveHourWindow, sevenDayWindow, IconState.Stale,
+                    message, _lastSuccessfulUpdate);
             }
         }
 
@@ -347,9 +381,10 @@ namespace CodexUsageTray
             string autoStartStatus = _autoStart.IsEnabled() ? "켜짐" : "꺼짐";
 
             MessageBox.Show(
-                "Codex 사용량 카드  ·  버전 " + typeof(Program).Assembly.GetName().Version.ToString(3) + "\r\n\r\n" +
+                "Codex 사용량 트레이  ·  버전 " + typeof(Program).Assembly.GetName().Version.ToString(3) + "\r\n\r\n" +
                 "표시 기준\r\n" +
-                "5시간, 7일 또는 두 사용량을 함께 표시할 수 있습니다.\r\n\r\n" +
+                "시스템 트레이 숫자는 선택한 기간의 남은 비율(%)입니다.\r\n" +
+                "왼쪽 클릭으로 5시간과 7일을 함께 보고, 오른쪽 클릭으로 설정을 엽니다.\r\n\r\n" +
                 "대시보드\r\n" +
                 "누적 토큰, 일별 사용량, 계정과 남은 사용량을 로컬에서 표시합니다.\r\n\r\n" +
                 "갱신 방식\r\n" +
@@ -357,7 +392,7 @@ namespace CodexUsageTray
                 "Windows 로그인 시 자동 실행: " + autoStartStatus + "\r\n" +
                 "설치 버전은 시작 후와 6시간마다 새 버전을 자동 확인합니다.\r\n" +
                 "별도 API 키 불필요 · 인증 정보 저장 안 함",
-                "Codex 사용량 카드 정보",
+                "Codex 사용량 트레이 정보",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
@@ -384,7 +419,7 @@ namespace CodexUsageTray
                 _settings.SaveUsageDisplayMode(newMode);
                 _displayMode = newMode;
                 UpdateDisplayModeChecks();
-                _widget.SetDisplayMode(newMode);
+                _trayIcon.SetDisplayMode(newMode);
             }
             catch (Exception ex)
             {
@@ -400,51 +435,7 @@ namespace CodexUsageTray
                 item.Checked = (UsageDisplayMode)item.Tag == _displayMode;
                 if (item.Checked)
                 {
-                    _displayModeMenu.ShortcutKeyDisplayString = _displayMode == UsageDisplayMode.Both
-                        ? "모두" : item.Text;
-                }
-            }
-        }
-
-        private ToolStripMenuItem CreatePositionItem(string text, CardCorner corner)
-        {
-            ToolStripMenuItem item = new ToolStripMenuItem(text);
-            item.Tag = corner;
-            item.Click += ChangeCardPosition;
-            return item;
-        }
-
-        private void ChangeCardPosition(object sender, EventArgs e)
-        {
-            ToolStripMenuItem item = sender as ToolStripMenuItem;
-            if (item == null || item.Tag == null)
-            {
-                return;
-            }
-
-            CardCorner newCorner = (CardCorner)item.Tag;
-            try
-            {
-                _settings.SaveCardCorner(newCorner);
-                _selectedCorner = newCorner;
-                UpdatePositionChecks();
-                _widget.SetCorner(newCorner);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("카드 위치를 변경하지 못했습니다.\r\n\r\n" + ex.Message,
-                    "Codex 사용량", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void UpdatePositionChecks()
-        {
-            foreach (ToolStripMenuItem item in _positionItems)
-            {
-                item.Checked = (CardCorner)item.Tag == _selectedCorner;
-                if (item.Checked)
-                {
-                    _positionMenu.ShortcutKeyDisplayString = item.Text;
+                    _displayModeMenu.ShortcutKeyDisplayString = item.Text;
                 }
             }
         }
@@ -455,6 +446,7 @@ namespace CodexUsageTray
             {
                 _autoStart.Toggle();
                 _autoStartItem.Checked = _autoStart.IsEnabled();
+                _popup.SetAutoStart(_autoStartItem.Checked);
             }
             catch (Exception ex)
             {
@@ -561,6 +553,7 @@ namespace CodexUsageTray
 
             _exiting = true;
             _refreshTimer.Stop();
+            _refreshTimer.Dispose();
             _updateTimer.Stop();
             _updateTimer.Dispose();
 
@@ -571,7 +564,9 @@ namespace CodexUsageTray
                 _dashboardServer.Dispose();
             }
 
-            _widget.Dispose();
+            _trayIcon.Dispose();
+            _popup.Dispose();
+            _menu.Dispose();
             _dispatcher.Dispose();
             ExitThread();
         }

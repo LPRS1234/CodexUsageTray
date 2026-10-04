@@ -22,7 +22,7 @@ namespace CodexUsageTray
 
         public UsageDisplayMode LoadUsageDisplayMode()
         {
-            return LoadEnum(DisplayModeRegistryValue, UsageDisplayMode.Both);
+            return LoadEnum(DisplayModeRegistryValue, UsageDisplayMode.FiveHours);
         }
 
         public void SaveUsageDisplayMode(UsageDisplayMode displayMode)
