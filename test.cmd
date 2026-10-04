@@ -16,7 +16,7 @@ call :run_test TrayMenuSmokeTest CodexUsageTray.Tests.TrayMenuSmokeTest
 if errorlevel 1 exit /b 1
 call :run_test NumericTrayIconSmokeTest CodexUsageTray.Tests.NumericTrayIconSmokeTest
 if errorlevel 1 exit /b 1
-call :run_test UsagePopupSmokeTest CodexUsageTray.Tests.UsagePopupSmokeTest
+call :run_test UsagePopupSmokeTest CodexUsageTray.Tests.UsagePopupSmokeTest "%PROJECT_DIR%bin\tests\popup"
 if errorlevel 1 exit /b 1
 call :run_test UsageRefreshServiceSmokeTest CodexUsageTray.Tests.UsageRefreshServiceSmokeTest
 if errorlevel 1 exit /b 1
@@ -29,9 +29,15 @@ echo All smoke tests passed.
 exit /b 0
 
 :run_test
+set "TEST_OUTPUT_PATH=%TEST_PREFIX%.%~1.exe"
+if not "%~3"=="" (
+  call "%PROJECT_DIR%build.cmd" "%~3"
+  if errorlevel 1 exit /b 1
+  set "TEST_OUTPUT_PATH=%~3\%~1.exe"
+)
 "%CSC%" /nologo /utf8output /codepage:65001 /target:exe /optimize+ /platform:anycpu ^
   /main:%~2 ^
-  /out:"%TEST_PREFIX%.%~1.exe" ^
+  /out:"%TEST_OUTPUT_PATH%" ^
   /reference:System.dll ^
   /reference:System.Core.dll ^
   /reference:System.Drawing.dll ^
@@ -40,5 +46,5 @@ exit /b 0
   /recurse:"%PROJECT_DIR%src\*.cs" ^
   "%PROJECT_DIR%tests\%~1.cs"
 if errorlevel 1 exit /b 1
-"%TEST_PREFIX%.%~1.exe"
+"%TEST_OUTPUT_PATH%"
 exit /b %errorlevel%

@@ -238,7 +238,7 @@ namespace CodexUsageTray
             }
         }
 
-        private static bool IsLightTaskbar()
+        internal static bool IsLightTaskbar()
         {
             try
             {

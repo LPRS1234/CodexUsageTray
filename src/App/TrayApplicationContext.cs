@@ -13,7 +13,6 @@ namespace CodexUsageTray
     {
         private const int RefreshIntervalMilliseconds = 10000;
 
-        private readonly NumericTrayIcon _trayIcon;
         private readonly UsagePopupForm _popup;
         private readonly ContextMenuStrip _menu;
         private readonly System.Windows.Forms.Timer _refreshTimer;
@@ -78,7 +77,7 @@ namespace CodexUsageTray
                 CreateDisplayModeItem("5시간", UsageDisplayMode.FiveHours),
                 CreateDisplayModeItem("7일", UsageDisplayMode.SevenDays)
             };
-            _displayModeMenu = new ToolStripMenuItem("아이콘에 표시할 사용량");
+            _displayModeMenu = new ToolStripMenuItem("작업표시줄에 표시할 사용량");
             _displayModeMenu.Name = "DisplayModeItem";
             _displayModeMenu.DropDownItems.AddRange(_displayModeItems);
             UpdateDisplayModeChecks();
@@ -130,7 +129,7 @@ namespace CodexUsageTray
                 UpdateDisplayModeChecks();
             };
             _menu = menu;
-            menu.KeyboardDismissed += delegate { _trayIcon.RestoreFocus(); };
+            menu.KeyboardDismissed += delegate { _popup.Activate(); };
 
             _popup = new UsagePopupForm();
             _popup.RefreshRequested += delegate { RefreshAsync(); };
@@ -140,23 +139,10 @@ namespace CodexUsageTray
             {
                 ShowOptionsMenu(new Rectangle(_popup.Right - 1, _popup.Bottom - 1, 1, 1));
             };
-            _popup.KeyboardDismissed += delegate { _trayIcon.RestoreFocus(); };
+            _popup.FormClosed += delegate { ExitApplication(); };
+            _popup.SetDisplayMode(_displayMode);
             _popup.SetAutoStart(_autoStartItem.Checked);
             _popup.UpdateUsage(null, null, IconState.Loading, null, null);
-
-            _trayIcon = new NumericTrayIcon(_displayMode);
-            _trayIcon.LeftClick += delegate(Rectangle anchor)
-            {
-                _menu.Close();
-                _popup.SetAutoStart(_autoStart.IsEnabled());
-                _popup.ToggleAt(anchor);
-                if (!_popup.Visible)
-                {
-                    _trayIcon.RestoreFocus();
-                }
-            };
-            _trayIcon.RightClick += ShowOptionsMenu;
-            _trayIcon.Update(null, null, IconState.Loading);
 
             string logoPath = Path.Combine(Application.StartupPath, "assets", "codex-terminal.png");
 
@@ -178,6 +164,8 @@ namespace CodexUsageTray
             };
             _updateTimer.Start();
 
+            Rectangle workArea = Screen.PrimaryScreen.WorkingArea;
+            _popup.ShowAt(new Rectangle(workArea.Right - 1, workArea.Bottom - 1, 1, 1));
             _dispatcher.BeginInvoke(new Action(RefreshAsync));
         }
 
@@ -218,7 +206,6 @@ namespace CodexUsageTray
 
         private void ShowOptionsMenu(Rectangle anchor)
         {
-            _popup.Hide();
             _menu.Close();
             _menu.Show(new Point(anchor.Right, anchor.Top), ToolStripDropDownDirection.AboveLeft);
         }
@@ -343,7 +330,6 @@ namespace CodexUsageTray
             }
 
             _lastSuccessfulUpdate = DateTime.Now;
-            _trayIcon.Update(fiveHourRemaining, sevenDayRemaining, IconState.Normal);
             _popup.UpdateUsage(fiveHourWindow, sevenDayWindow, IconState.Normal,
                 null, _lastSuccessfulUpdate);
         }
@@ -360,17 +346,12 @@ namespace CodexUsageTray
             RateLimitSnapshot lastSnapshot = _refreshService.LastSnapshot;
             if (lastSnapshot == null)
             {
-                _trayIcon.Update(null, null, IconState.Error);
                 _popup.UpdateUsage(null, null, IconState.Error, message, _lastSuccessfulUpdate);
             }
             else
             {
                 RateLimitWindow fiveHourWindow = lastSnapshot.GetFiveHourWindow();
                 RateLimitWindow sevenDayWindow = lastSnapshot.GetSevenDayWindow();
-                _trayIcon.Update(
-                    fiveHourWindow == null ? (int?)null : fiveHourWindow.RemainingPercent,
-                    sevenDayWindow == null ? (int?)null : sevenDayWindow.RemainingPercent,
-                    IconState.Stale);
                 _popup.UpdateUsage(fiveHourWindow, sevenDayWindow, IconState.Stale,
                     message, _lastSuccessfulUpdate);
             }
@@ -381,10 +362,11 @@ namespace CodexUsageTray
             string autoStartStatus = _autoStart.IsEnabled() ? "켜짐" : "꺼짐";
 
             MessageBox.Show(
-                "Codex 사용량 트레이  ·  버전 " + typeof(Program).Assembly.GetName().Version.ToString(3) + "\r\n\r\n" +
+                "Codex 사용량  ·  버전 " + typeof(Program).Assembly.GetName().Version.ToString(3) + "\r\n\r\n" +
                 "표시 기준\r\n" +
-                "시스템 트레이 숫자는 선택한 기간의 남은 비율(%)입니다.\r\n" +
-                "왼쪽 클릭으로 5시간과 7일을 함께 보고, 오른쪽 클릭으로 설정을 엽니다.\r\n\r\n" +
+                "작업표시줄 숫자는 선택한 기간의 남은 비율(%)입니다.\r\n" +
+                "작업표시줄 버튼으로 사용량 창을 열고, 창의 설정 버튼으로 옵션을 엽니다.\r\n" +
+                "최소화하거나 Esc를 눌러도 작업표시줄 버튼은 유지됩니다. 창을 닫으면 앱이 종료됩니다.\r\n\r\n" +
                 "대시보드\r\n" +
                 "누적 토큰, 일별 사용량, 계정과 남은 사용량을 로컬에서 표시합니다.\r\n\r\n" +
                 "갱신 방식\r\n" +
@@ -392,7 +374,7 @@ namespace CodexUsageTray
                 "Windows 로그인 시 자동 실행: " + autoStartStatus + "\r\n" +
                 "설치 버전은 시작 후와 6시간마다 새 버전을 자동 확인합니다.\r\n" +
                 "별도 API 키 불필요 · 인증 정보 저장 안 함",
-                "Codex 사용량 트레이 정보",
+                "Codex 사용량 정보",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
@@ -419,7 +401,7 @@ namespace CodexUsageTray
                 _settings.SaveUsageDisplayMode(newMode);
                 _displayMode = newMode;
                 UpdateDisplayModeChecks();
-                _trayIcon.SetDisplayMode(newMode);
+                _popup.SetDisplayMode(newMode);
             }
             catch (Exception ex)
             {
@@ -564,7 +546,6 @@ namespace CodexUsageTray
                 _dashboardServer.Dispose();
             }
 
-            _trayIcon.Dispose();
             _popup.Dispose();
             _menu.Dispose();
             _dispatcher.Dispose();
