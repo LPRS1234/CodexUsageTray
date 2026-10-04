@@ -19,6 +19,7 @@ namespace CodexUsageTray.Tests
                 Application.EnableVisualStyles();
                 Type popupType = typeof(RateLimitWindow).Assembly.GetType("CodexUsageTray.UsagePopupForm");
                 Assert(popupType != null, "usage flyout is missing");
+                VerifyRepeatedLayoutAndPainting(popupType);
                 VerifyValuesAndActions(popupType);
                 VerifyPlacement(popupType);
                 VerifyDismissalAndReopening(popupType);
@@ -33,6 +34,44 @@ namespace CodexUsageTray.Tests
                 }
                 Console.Error.WriteLine(exception.Message);
                 return 1;
+            }
+        }
+
+        private static void VerifyRepeatedLayoutAndPainting(Type popupType)
+        {
+            using (Form popup = CreatePopup(popupType))
+            {
+                Rectangle workArea = Screen.PrimaryScreen.WorkingArea;
+                foreach (float scale in new[] { 1f, 1f, 0.75f, 0.8f, 1.25f, 1.25f, 1.5f, 1.5f, 2f, 2f, 1f })
+                {
+                    Invoke(popup, "ApplyLayout", scale, workArea.Size);
+                    VerifyLabelPainting(popup);
+                }
+                Rectangle anchor = new Rectangle(workArea.Right - 28, workArea.Bottom, 24, 24);
+                for (int index = 0; index < 5; index++)
+                {
+                    Invoke(popup, "ShowAt", anchor);
+                    VerifyLabelPainting(popup);
+                    using (Bitmap bitmap = new Bitmap(popup.ClientSize.Width, popup.ClientSize.Height))
+                    {
+                        popup.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                    }
+                    popup.Hide();
+                }
+            }
+        }
+
+        private static void VerifyLabelPainting(Control parent)
+        {
+            foreach (Control control in parent.Controls)
+            {
+                Label label = control as Label;
+                if (label != null)
+                {
+                    Assert(TextRenderer.MeasureText(label.Text, label.Font).Height > 0,
+                        "label text must remain drawable after repeated layout and reopening");
+                }
+                VerifyLabelPainting(control);
             }
         }
 

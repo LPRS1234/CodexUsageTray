@@ -380,19 +380,26 @@ namespace CodexUsageTray
         private void UpdateFonts()
         {
             Font oldBody = _bodyFont, oldCaption = _captionFont, oldValue = _valueFont, oldTitle = _titleFont;
-            _bodyFont = new Font("Segoe UI", Math.Max(10f, 13f * _layoutScale), FontStyle.Regular, GraphicsUnit.Pixel);
-            _captionFont = new Font("Segoe UI", Math.Max(9f, 11f * _layoutScale), FontStyle.Regular, GraphicsUnit.Pixel);
-            _valueFont = new Font("Segoe UI Semibold", Math.Max(15f, 21f * _layoutScale), FontStyle.Regular, GraphicsUnit.Pixel);
-            _titleFont = new Font("Segoe UI Semibold", Math.Max(10f, 13f * _layoutScale), FontStyle.Regular, GraphicsUnit.Pixel);
+            _bodyFont = CreateFont(oldBody, "Segoe UI", Math.Max(10f, 13f * _layoutScale));
+            _captionFont = CreateFont(oldCaption, "Segoe UI", Math.Max(9f, 11f * _layoutScale));
+            _valueFont = CreateFont(oldValue, "Segoe UI Semibold", Math.Max(15f, 21f * _layoutScale));
+            _titleFont = CreateFont(oldTitle, "Segoe UI Semibold", Math.Max(10f, 13f * _layoutScale));
             Font = _bodyFont;
             _title.Font = _titleFont;
             _fiveValue.Font = _sevenValue.Font = _valueFont;
             _refreshLabel.Font = _dashboardLabel.Font = _autoStartLabel.Font = _captionFont;
             _fiveReset.Font = _sevenReset.Font = _status.Font = _captionFont;
-            if (oldBody != null) oldBody.Dispose();
-            if (oldCaption != null) oldCaption.Dispose();
-            if (oldValue != null) oldValue.Dispose();
-            if (oldTitle != null) oldTitle.Dispose();
+            if (oldBody != null && !ReferenceEquals(oldBody, _bodyFont)) oldBody.Dispose();
+            if (oldCaption != null && !ReferenceEquals(oldCaption, _captionFont)) oldCaption.Dispose();
+            if (oldValue != null && !ReferenceEquals(oldValue, _valueFont)) oldValue.Dispose();
+            if (oldTitle != null && !ReferenceEquals(oldTitle, _titleFont)) oldTitle.Dispose();
+        }
+
+        private static Font CreateFont(Font current, string family, float size)
+        {
+            // WinForms retains the existing Font when an equal Font is assigned.
+            if (current != null && current.Size == size) return current;
+            return new Font(family, size, FontStyle.Regular, GraphicsUnit.Pixel);
         }
 
         private void UpdateWindow(RateLimitWindow window, Label value, UsageProgressBar progress, Label reset)
