@@ -17,6 +17,7 @@ namespace CodexUsageTray
         private const int WmActivate = 0x0006;
         private readonly Panel _scrollHost;
         private readonly Panel _content;
+        private readonly Panel _settingsPage;
         private readonly Panel _footer;
         private readonly Label _title;
         private readonly GlyphPicture _appGlyph;
@@ -36,6 +37,20 @@ namespace CodexUsageTray
         private readonly Label _sevenReset;
         private readonly UsageProgressBar _sevenProgress;
         private readonly Label _status;
+        private readonly Label _settingsTitle;
+        private readonly Label _settingsStatus;
+        private readonly Label _settingsFiveSummary;
+        private readonly Label _settingsSevenSummary;
+        private readonly Label _displayModeLabel;
+        private readonly QuickActionButton _back;
+        private readonly QuickActionButton _settingsDashboard;
+        private readonly QuickActionButton _settingsRefresh;
+        private readonly QuickActionButton _fiveDisplay;
+        private readonly QuickActionButton _sevenDisplay;
+        private readonly QuickActionButton _settingsAutoStart;
+        private readonly QuickActionButton _settingsUpdate;
+        private readonly QuickActionButton _settingsAbout;
+        private readonly QuickActionButton _settingsExit;
         private readonly System.Windows.Forms.Timer _freshnessTimer;
         private Font _bodyFont;
         private Font _captionFont;
@@ -49,6 +64,7 @@ namespace CodexUsageTray
         private DateTime? _lastUpdated;
         private bool _refreshing;
         private bool _autoStartEnabled;
+        private UsageDisplayMode _displayMode = UsageDisplayMode.FiveHours;
         private bool _positioning;
         private bool _dark;
         private bool _dismissedOnAnchor;
@@ -67,6 +83,10 @@ namespace CodexUsageTray
         public event EventHandler DashboardRequested;
         public event EventHandler AutoStartRequested;
         public event EventHandler SettingsRequested;
+        public event Action<UsageDisplayMode> DisplayModeRequested;
+        public event EventHandler UpdateRequested;
+        public event EventHandler AboutRequested;
+        public event EventHandler ExitRequested;
         public event EventHandler KeyboardDismissed;
 
         public UsagePopupForm()
@@ -85,10 +105,12 @@ namespace CodexUsageTray
             MinimumSize = Size.Empty;
 
             _scrollHost = new Panel { Dock = DockStyle.Fill, AutoScroll = true, TabStop = false };
-            _content = new Panel { TabStop = false };
+            _content = new Panel { Name = "UsagePage", TabStop = false };
+            _settingsPage = new Panel { Name = "SettingsPage", TabStop = false, Visible = false };
             _footer = new Panel { TabStop = false };
             Controls.Add(_scrollHost);
             _scrollHost.Controls.Add(_content);
+            _scrollHost.Controls.Add(_settingsPage);
             _content.Controls.Add(_footer);
             _content.Paint += PaintContent;
             _footer.Paint += PaintFooter;
@@ -115,13 +137,51 @@ namespace CodexUsageTray
             _status = AddLabel(_footer, "StatusLabel", "사용량 확인 중…");
             _status.AccessibleRole = AccessibleRole.StaticText;
 
+            _back = AddButton(_settingsPage, "SettingsBackButton", "사용량으로 돌아가기", ActionGlyph.Back, 0);
+            _settingsTitle = AddLabel(_settingsPage, "SettingsTitle", "Codex 설정");
+            _settingsTitle.AutoEllipsis = true;
+            _settingsStatus = AddLabel(_settingsPage, "SettingsStatusLabel", "확인 중…");
+            _settingsStatus.TextAlign = ContentAlignment.MiddleRight;
+            _settingsFiveSummary = AddLabel(_settingsPage, "SettingsFiveSummary", "5시간 · 사용량 확인 중");
+            _settingsSevenSummary = AddLabel(_settingsPage, "SettingsSevenSummary", "7일 · 사용량 확인 중");
+            _settingsDashboard = AddSettingsButton("SettingsDashboardButton", "대시보드 이동", ActionGlyph.Dashboard, 1);
+            _settingsRefresh = AddSettingsButton("SettingsRefreshButton", "지금 새로고침", ActionGlyph.Refresh, 2);
+            _displayModeLabel = AddLabel(_settingsPage, "DisplayModeLabel", "아이콘에 표시할 사용량");
+            _fiveDisplay = AddSettingsButton("FiveHourDisplayButton", "5시간", ActionGlyph.None, 3);
+            _sevenDisplay = AddSettingsButton("SevenDayDisplayButton", "7일", ActionGlyph.None, 4);
+            _fiveDisplay.CenterText = _sevenDisplay.CenterText = true;
+            _fiveDisplay.AccessibleRole = _sevenDisplay.AccessibleRole = AccessibleRole.RadioButton;
+            _settingsAutoStart = AddSettingsButton("SettingsAutoStartButton", "Windows 시작 시 자동 실행", ActionGlyph.Power, 5);
+            _settingsAutoStart.ShowToggle = true;
+            _settingsAutoStart.AccessibleRole = AccessibleRole.CheckButton;
+            _settingsUpdate = AddSettingsButton("SettingsUpdateButton", "업데이트 확인", ActionGlyph.Update, 6);
+            _settingsAbout = AddSettingsButton("SettingsAboutButton", "정보", ActionGlyph.Info, 7);
+            _settingsExit = AddSettingsButton("SettingsExitButton", "종료", ActionGlyph.Power, 8);
+            _settingsPage.Paint += PaintSettingsPage;
+
             _refresh.Click += delegate { Raise(RefreshRequested); };
             _dashboard.Click += delegate { Hide(); Raise(DashboardRequested); };
             _autoStart.Click += delegate { Raise(AutoStartRequested); };
-            _settings.Click += delegate { Hide(); Raise(SettingsRequested); };
+            _settings.Click += delegate { ShowSettings(); };
+            _back.Click += delegate { ShowUsage(); };
+            _settingsDashboard.Click += delegate { Hide(); Raise(DashboardRequested); };
+            _settingsRefresh.Click += delegate { Raise(RefreshRequested); };
+            _settingsAutoStart.Click += delegate { Raise(AutoStartRequested); };
+            _fiveDisplay.Click += delegate
+            {
+                if (DisplayModeRequested != null) DisplayModeRequested(UsageDisplayMode.FiveHours);
+            };
+            _sevenDisplay.Click += delegate
+            {
+                if (DisplayModeRequested != null) DisplayModeRequested(UsageDisplayMode.SevenDays);
+            };
+            _settingsUpdate.Click += delegate { Raise(UpdateRequested); };
+            _settingsAbout.Click += delegate { Raise(AboutRequested); };
+            _settingsExit.Click += delegate { Raise(ExitRequested); };
             ApplyTheme();
             ApplyLayout(1f, new Size(360, 400));
             SetAutoStart(false);
+            SetDisplayMode(UsageDisplayMode.FiveHours);
             UpdateStatus();
             _freshnessTimer = new System.Windows.Forms.Timer { Interval = 15000 };
             _freshnessTimer.Tick += delegate { UpdateStatus(); };
@@ -135,6 +195,8 @@ namespace CodexUsageTray
             // Server errors can contain account details. Use local, actionable status copy.
             UpdateWindow(fiveHourWindow, _fiveValue, _fiveProgress, _fiveReset);
             UpdateWindow(sevenDayWindow, _sevenValue, _sevenProgress, _sevenReset);
+            _settingsFiveSummary.Text = SummaryText("5시간", _fiveValue, _fiveReset);
+            _settingsSevenSummary.Text = SummaryText("7일", _sevenValue, _sevenReset);
             UpdateStatus();
         }
 
@@ -144,6 +206,9 @@ namespace CodexUsageTray
             _autoStartLabel.Text = "자동 실행 " + (enabled ? "켬" : "끔");
             _autoStart.AccessibleName = "Windows 시작 시 자동 실행 " + (enabled ? "끄기" : "켜기");
             _autoStart.AccessibleDescription = "자동 실행 " + (enabled ? "켬" : "끔");
+            _settingsAutoStart.Checked = enabled;
+            _settingsAutoStart.AccessibleName = _autoStart.AccessibleName;
+            _settingsAutoStart.AccessibleDescription = _autoStart.AccessibleDescription;
             ApplyButtonColors();
         }
 
@@ -151,6 +216,8 @@ namespace CodexUsageTray
         {
             _refreshing = refreshing;
             _refresh.Enabled = !refreshing;
+            _settingsRefresh.Enabled = !refreshing;
+            _settingsRefresh.Text = refreshing ? "갱신 중…" : "지금 새로고침";
             _refreshLabel.Text = refreshing ? "갱신 중…" : "새로고침";
             UpdateStatus();
         }
@@ -158,6 +225,7 @@ namespace CodexUsageTray
         public void ShowAt(Rectangle anchor)
         {
             if (IsDisposed) return;
+            ShowUsage();
             _dismissedOnAnchor = false;
             _anchor = anchor;
             Screen screen = Screen.FromRectangle(anchor);
@@ -176,6 +244,51 @@ namespace CodexUsageTray
             {
                 _positioning = false;
             }
+        }
+
+        public void ShowSettingsAt(Rectangle anchor)
+        {
+            if (IsDisposed) return;
+            if (!Visible) ShowAt(anchor);
+            ShowSettings();
+        }
+
+        public void ShowSettings()
+        {
+            if (IsDisposed) return;
+            Raise(SettingsRequested);
+            _content.Visible = false;
+            _settingsPage.Visible = true;
+            _settingsPage.BringToFront();
+            _scrollHost.AutoScrollPosition = Point.Empty;
+            Text = AccessibleName = "Codex 설정";
+            _back.Focus();
+        }
+
+        private void ShowUsage()
+        {
+            _settingsPage.Visible = false;
+            _content.Visible = true;
+            _content.BringToFront();
+            _scrollHost.AutoScrollPosition = Point.Empty;
+            Text = AccessibleName = "Codex 사용량";
+            if (Visible) _settings.Focus();
+        }
+
+        public void SetDisplayMode(UsageDisplayMode mode)
+        {
+            _displayMode = mode == UsageDisplayMode.SevenDays ? mode : UsageDisplayMode.FiveHours;
+            _fiveDisplay.Checked = _displayMode == UsageDisplayMode.FiveHours;
+            _sevenDisplay.Checked = _displayMode == UsageDisplayMode.SevenDays;
+            _fiveDisplay.AccessibleDescription = _fiveDisplay.Checked ? "선택됨" : "선택 안 됨";
+            _sevenDisplay.AccessibleDescription = _sevenDisplay.Checked ? "선택됨" : "선택 안 됨";
+            ApplyButtonColors();
+        }
+
+        public void SetUpdateStatus(bool checking, string text)
+        {
+            _settingsUpdate.Enabled = !checking;
+            _settingsUpdate.Text = text;
         }
 
         public void ToggleAt(Rectangle anchor)
@@ -330,6 +443,8 @@ namespace CodexUsageTray
             ClientSize = new Size(width, height);
             _content.Location = new Point(1, 1);
             _content.Size = new Size(contentWidth, contentHeight);
+            _settingsPage.Location = _content.Location;
+            _settingsPage.Size = _content.Size;
             _scrollHost.AutoScrollMinSize = new Size(0, contentHeight + 2);
             _scrollHost.AutoScrollPosition = Point.Empty;
             UpdateFonts();
@@ -361,10 +476,41 @@ namespace CodexUsageTray
             _settings.ScaleFactor = _layoutScale;
             _status.Bounds = new Rectangle(margin, LayoutScale(9), Math.Max(1, _settings.Left - margin - LayoutScale(8)),
                 LayoutScale(40));
+            LayoutSettings(margin, usable);
             _content.ResumeLayout(false);
             _scrollHost.ResumeLayout(false);
             ResumeLayout(false);
             _content.Invalidate();
+            _settingsPage.Invalidate();
+        }
+
+        private void LayoutSettings(int margin, int usable)
+        {
+            _back.Bounds = new Rectangle(margin - LayoutScale(5), LayoutScale(16), LayoutScale(32), LayoutScale(32));
+            _back.ScaleFactor = _layoutScale;
+            _settingsTitle.Bounds = new Rectangle(margin + LayoutScale(38), LayoutScale(19),
+                Math.Max(1, usable - LayoutScale(166)), LayoutScale(26));
+            _settingsStatus.Bounds = new Rectangle(margin + usable - LayoutScale(120), LayoutScale(21),
+                LayoutScale(120), LayoutScale(22));
+            _settingsFiveSummary.Bounds = new Rectangle(margin, LayoutScale(58), usable, LayoutScale(20));
+            _settingsSevenSummary.Bounds = new Rectangle(margin, LayoutScale(79), usable, LayoutScale(20));
+            QuickActionButton[] rows = new[] { _settingsDashboard, _settingsRefresh, _settingsAutoStart,
+                _settingsUpdate, _settingsAbout, _settingsExit };
+            int[] tops = new[] { 108, 146, 232, 270, 308, 356 };
+            for (int index = 0; index < rows.Length; index++)
+            {
+                rows[index].Bounds = new Rectangle(margin - LayoutScale(8), LayoutScale(tops[index]),
+                    usable + LayoutScale(16), LayoutScale(34));
+                rows[index].ScaleFactor = _layoutScale;
+            }
+            int choiceWidth = LayoutScale(46);
+            int gap = LayoutScale(4);
+            int choicesLeft = margin + usable - choiceWidth * 2 - gap;
+            _displayModeLabel.Bounds = new Rectangle(margin, LayoutScale(188),
+                Math.Max(1, choicesLeft - margin - gap), LayoutScale(32));
+            _fiveDisplay.Bounds = new Rectangle(choicesLeft, LayoutScale(188), choiceWidth, LayoutScale(32));
+            _sevenDisplay.Bounds = new Rectangle(choicesLeft + choiceWidth + gap, LayoutScale(188), choiceWidth, LayoutScale(32));
+            _fiveDisplay.ScaleFactor = _sevenDisplay.ScaleFactor = _layoutScale;
         }
 
         private void LayoutWindow(Label label, Label value, UsageProgressBar progress,
@@ -386,6 +532,10 @@ namespace CodexUsageTray
             _titleFont = CreateFont(oldTitle, "Segoe UI Semibold", Math.Max(10f, 13f * _layoutScale));
             Font = _bodyFont;
             _title.Font = _titleFont;
+            _settingsTitle.Font = _titleFont;
+            _settingsStatus.Font = _captionFont;
+            _settingsFiveSummary.Font = _settingsSevenSummary.Font = _captionFont;
+            _fiveDisplay.Font = _sevenDisplay.Font = _captionFont;
             _fiveValue.Font = _sevenValue.Font = _valueFont;
             _refreshLabel.Font = _dashboardLabel.Font = _autoStartLabel.Font = _captionFont;
             _fiveReset.Font = _sevenReset.Font = _status.Font = _captionFont;
@@ -427,6 +577,11 @@ namespace CodexUsageTray
             catch (ArgumentOutOfRangeException) { return "초기화 시각 확인 중"; }
         }
 
+        private static string SummaryText(string duration, Label value, Label reset)
+        {
+            return duration + (value.Text == "--" ? " · 사용량 확인 중" : " " + value.Text + " 남음 · " + reset.Text);
+        }
+
         private void UpdateStatus()
         {
             string freshness = FreshnessText();
@@ -445,6 +600,11 @@ namespace CodexUsageTray
             _status.ForeColor = (_state == IconState.Stale || _state == IconState.Error) ? _warningColor : _secondaryColor;
             _status.AccessibleDescription = _status.Text + (_lastUpdated.HasValue ? " · 마지막 성공 " +
                 _lastUpdated.Value.ToLocalTime().ToString("M/d HH:mm", CultureInfo.CurrentCulture) : "");
+            _settingsStatus.Text = _refreshing ? "갱신 중…" :
+                (_state == IconState.Loading ? "확인 중…" :
+                (_state == IconState.Stale || _state == IconState.Error ? "갱신 실패" : freshness));
+            _settingsStatus.ForeColor = _status.ForeColor;
+            _settingsStatus.AccessibleDescription = _status.AccessibleDescription;
         }
 
         private string FreshnessText()
@@ -495,10 +655,12 @@ namespace CodexUsageTray
             ForeColor = _textColor;
             _scrollHost.BackColor = _surfaceColor;
             _content.BackColor = _surfaceColor;
+            _settingsPage.BackColor = _surfaceColor;
             _footer.BackColor = _footerColor;
             _appGlyph.ForeColor = _textColor;
             Label[] secondary = new[] { _fiveReset, _sevenReset, _autoStartLabel };
             foreach (Label label in secondary) label.ForeColor = _secondaryColor;
+            _settingsFiveSummary.ForeColor = _settingsSevenSummary.ForeColor = _secondaryColor;
             _fiveProgress.BackColor = _sevenProgress.BackColor = _dark ? Color.FromArgb(72, 72, 72) : _borderColor;
             _fiveProgress.ForeColor = _fiveProgress.Value <= 15 ? _warningColor : _accentColor;
             _sevenProgress.ForeColor = _sevenProgress.Value <= 15 ? _warningColor : _accentColor;
@@ -528,6 +690,22 @@ namespace CodexUsageTray
                 _autoStart.HoverColor = _accentColor;
             }
             foreach (QuickActionButton button in buttons) button.Invalidate();
+            QuickActionButton[] settingsButtons = new[] { _back, _settingsDashboard, _settingsRefresh,
+                _fiveDisplay, _sevenDisplay, _settingsAutoStart, _settingsUpdate, _settingsAbout, _settingsExit };
+            foreach (QuickActionButton button in settingsButtons)
+            {
+                bool selected = button.CenterText && button.Checked;
+                button.BackColor = selected ? _accentColor :
+                    (button.CenterText ? tileColor : (button == _settingsExit ? _footerColor : _surfaceColor));
+                button.ForeColor = selected ? _accentInk : _textColor;
+                button.HoverColor = selected ? _accentColor : hover;
+                button.BorderColor = selected ? _accentColor : _borderColor;
+                button.ToggleColor = _accentColor;
+                button.ToggleInk = _accentInk;
+                button.Invalidate();
+            }
+            _settingsExit.ForeColor = SystemInformation.HighContrast ? SystemColors.WindowText :
+                (_dark ? Color.FromArgb(255, 153, 164) : Color.FromArgb(196, 43, 28));
         }
 
         private void ApplyWindowAppearance()
@@ -555,6 +733,17 @@ namespace CodexUsageTray
             using (Pen pen = new Pen(_borderColor)) e.Graphics.DrawLine(pen, 0, 0, _footer.Width, 0);
         }
 
+        private void PaintSettingsPage(object sender, PaintEventArgs e)
+        {
+            using (SolidBrush brush = new SolidBrush(_footerColor))
+                e.Graphics.FillRectangle(brush, 0, LayoutScale(349), _settingsPage.Width, LayoutScale(49));
+            using (Pen pen = new Pen(_borderColor))
+            {
+                foreach (int top in new[] { 102, 226, 349 })
+                    e.Graphics.DrawLine(pen, 0, LayoutScale(top), _settingsPage.Width, LayoutScale(top));
+            }
+        }
+
         private int Scale(int value) { return (int)Math.Round(value * _scale); }
         private int LayoutScale(int value) { return (int)Math.Round(value * _layoutScale); }
 
@@ -580,6 +769,13 @@ namespace CodexUsageTray
                 AccessibleRole = AccessibleRole.PushButton
             };
             parent.Controls.Add(button);
+            return button;
+        }
+
+        private QuickActionButton AddSettingsButton(string name, string text, ActionGlyph glyph, int tabIndex)
+        {
+            QuickActionButton button = AddButton(_settingsPage, name, text, glyph, tabIndex);
+            button.Text = text;
             return button;
         }
 
@@ -643,7 +839,7 @@ namespace CodexUsageTray
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
 
-        private enum ActionGlyph { Refresh, Dashboard, Power, Settings, Terminal }
+        private enum ActionGlyph { Refresh, Dashboard, Power, Settings, Terminal, None, Back, Update, Info }
 
         private sealed class UsageProgressBar : ProgressBar
         {
@@ -685,9 +881,25 @@ namespace CodexUsageTray
         {
             private readonly ActionGlyph _glyph;
             private bool _hovered;
+            private bool _checked;
             public float ScaleFactor = 1f;
             public Color HoverColor;
             public Color BorderColor;
+            public bool CenterText;
+            public bool ShowToggle;
+            public bool Checked
+            {
+                get { return _checked; }
+                set
+                {
+                    if (_checked == value) return;
+                    _checked = value;
+                    Invalidate();
+                    if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
+                }
+            }
+            public Color ToggleColor;
+            public Color ToggleInk;
 
             public QuickActionButton(ActionGlyph glyph)
             {
@@ -698,6 +910,38 @@ namespace CodexUsageTray
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                     ControlStyles.OptimizedDoubleBuffer, true);
+            }
+
+            protected override AccessibleObject CreateAccessibilityInstance()
+            {
+                if (AccessibleRole == AccessibleRole.RadioButton || AccessibleRole == AccessibleRole.CheckButton)
+                    return new CheckedButtonAccessibleObject(this);
+                return base.CreateAccessibilityInstance();
+            }
+
+            private sealed class CheckedButtonAccessibleObject : ButtonBase.ButtonBaseAccessibleObject
+            {
+                private readonly QuickActionButton _button;
+
+                public CheckedButtonAccessibleObject(QuickActionButton button) : base(button)
+                {
+                    _button = button;
+                }
+
+                public override AccessibleStates State
+                {
+                    get { return base.State | (_button.Checked ? AccessibleStates.Checked : AccessibleStates.None); }
+                }
+
+                public override string DefaultAction
+                {
+                    get { return _button.ShowToggle ? "전환" : "선택"; }
+                }
+
+                public override void DoDefaultAction()
+                {
+                    _button.PerformClick();
+                }
             }
 
             protected override void OnMouseEnter(EventArgs e) { _hovered = true; base.OnMouseEnter(e); Invalidate(); }
@@ -723,16 +967,51 @@ namespace CodexUsageTray
                 using (Pen border = new Pen(BorderColor))
                 {
                     e.Graphics.FillPath(brush, path);
-                    if (_glyph != ActionGlyph.Settings || (_hovered && Enabled))
+                    if ((string.IsNullOrEmpty(Text) && _glyph != ActionGlyph.Settings && _glyph != ActionGlyph.Back) ||
+                        CenterText || (_hovered && Enabled))
                         e.Graphics.DrawPath(border, path);
                 }
-                DrawGlyph(e.Graphics, _glyph, ClientRectangle, Enabled ? ForeColor : SystemColors.GrayText, ScaleFactor);
+                Color ink = Enabled ? ForeColor : SystemColors.GrayText;
+                if (string.IsNullOrEmpty(Text))
+                {
+                    DrawGlyph(e.Graphics, _glyph, ClientRectangle, ink, ScaleFactor);
+                }
+                else
+                {
+                    int inset = (int)Math.Round(12 * ScaleFactor);
+                    int iconWidth = (int)Math.Round(20 * ScaleFactor);
+                    int textLeft = CenterText ? 0 : inset + iconWidth + (int)Math.Round(10 * ScaleFactor);
+                    int textRight = CenterText ? 0 : inset + (ShowToggle ? (int)Math.Round(50 * ScaleFactor) : 0);
+                    DrawGlyph(e.Graphics, _glyph, new Rectangle(inset, 0, iconWidth, Height), ink, ScaleFactor);
+                    TextRenderer.DrawText(e.Graphics, Text, Font,
+                        new Rectangle(textLeft, 0, Math.Max(1, Width - textLeft - textRight), Height), ink,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis |
+                        TextFormatFlags.NoPrefix | (CenterText ? TextFormatFlags.HorizontalCenter : TextFormatFlags.Left));
+                    if (ShowToggle) DrawToggle(e.Graphics, inset);
+                }
                 if (Focused && ShowFocusCues)
                 {
                     Rectangle focus = ClientRectangle;
                     focus.Inflate(-4, -4);
                     ControlPaint.DrawFocusRectangle(e.Graphics, focus, ForeColor, BackColor);
                 }
+            }
+
+            private void DrawToggle(Graphics graphics, int inset)
+            {
+                float width = 40f * ScaleFactor, height = 20f * ScaleFactor;
+                RectangleF track = new RectangleF(Width - inset - width, (Height - height) / 2f, width, height);
+                using (GraphicsPath path = Rounded(track, height / 2f))
+                using (SolidBrush brush = new SolidBrush(Checked ? ToggleColor : BackColor))
+                using (Pen pen = new Pen(Checked ? ToggleColor : ForeColor))
+                {
+                    graphics.FillPath(brush, path);
+                    graphics.DrawPath(pen, path);
+                }
+                float diameter = 12f * ScaleFactor, padding = 4f * ScaleFactor;
+                float x = Checked ? track.Right - padding - diameter : track.Left + padding;
+                using (SolidBrush knob = new SolidBrush(Checked ? ToggleInk : ForeColor))
+                    graphics.FillEllipse(knob, x, track.Top + padding, diameter, diameter);
             }
         }
 
@@ -750,6 +1029,7 @@ namespace CodexUsageTray
 
         private static void DrawGlyph(Graphics graphics, ActionGlyph glyph, Rectangle bounds, Color color, float scale)
         {
+            if (glyph == ActionGlyph.None) return;
             GraphicsState state = graphics.Save();
             try
             {
@@ -787,6 +1067,23 @@ namespace CodexUsageTray
                         }
                         graphics.DrawPolygon(pen, points);
                         graphics.DrawEllipse(pen, -2.5f, -2.5f, 5, 5);
+                    }
+                    else if (glyph == ActionGlyph.Back)
+                    {
+                        graphics.DrawLine(pen, -7, 0, 7, 0);
+                        graphics.DrawLines(pen, new[] { new PointF(-1, -6), new PointF(-7, 0), new PointF(-1, 6) });
+                    }
+                    else if (glyph == ActionGlyph.Update)
+                    {
+                        graphics.DrawLine(pen, 0, 4, 0, -8);
+                        graphics.DrawLines(pen, new[] { new PointF(-5, -3), new PointF(0, -8), new PointF(5, -3) });
+                        graphics.DrawLines(pen, new[] { new PointF(-7, 1), new PointF(-7, 7), new PointF(7, 7), new PointF(7, 1) });
+                    }
+                    else if (glyph == ActionGlyph.Info)
+                    {
+                        graphics.DrawEllipse(pen, -7, -7, 14, 14);
+                        graphics.DrawLine(pen, 0, -1, 0, 4);
+                        graphics.DrawEllipse(pen, -0.6f, -4, 1.2f, 1.2f);
                     }
                     else
                     {

@@ -20,8 +20,9 @@ namespace CodexUsageTray.Tests
                 Application.EnableVisualStyles();
                 Type popupType = typeof(RateLimitWindow).Assembly.GetType("CodexUsageTray.UsagePopupForm");
                 Assert(popupType != null, "usage flyout is missing");
-                VerifyRepeatedLayoutAndPainting(popupType);
                 VerifyValuesAndActions(popupType);
+                VerifyRepeatedLayoutAndPainting(popupType);
+                VerifySettingsNavigationAndActions(popupType);
                 VerifyPlacement(popupType);
                 VerifyDismissalAndReopening(popupType);
                 VerifyTrayApplicationLifecycle();
@@ -58,6 +59,13 @@ namespace CodexUsageTray.Tests
                     {
                         popup.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
                     }
+                    Click(popup, "SettingsButton");
+                    VerifyLabelPainting(popup);
+                    using (Bitmap bitmap = new Bitmap(popup.ClientSize.Width, popup.ClientSize.Height))
+                    {
+                        popup.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                    }
+                    Click(popup, "SettingsBackButton");
                     popup.Hide();
                 }
             }
@@ -146,8 +154,173 @@ namespace CodexUsageTray.Tests
                 Click(popup, "DashboardButton");
                 Assert(dashboard == 1 && !popup.Visible, "dashboard action must dismiss the flyout");
                 Invoke(popup, "ShowAt", new Rectangle(workArea.Right - 28, workArea.Bottom, 24, 24));
+                IntPtr handle = popup.Handle;
+                Rectangle bounds = popup.Bounds;
+                int hidden = 0;
+                popup.VisibleChanged += delegate { if (!popup.Visible) hidden++; };
                 Click(popup, "SettingsButton");
-                Assert(settings == 1 && !popup.Visible, "settings action must dismiss the flyout");
+                Assert(popup.Visible && popup.Handle == handle && popup.Bounds == bounds && hidden == 0,
+                    "settings must keep the same popup window visible without a transient hide");
+                Assert(settings == 1 && popup.Visible && Find(popup, "SettingsPage").Visible,
+                    "settings action must change pages inside the visible flyout");
+            }
+        }
+
+        private static void VerifySettingsNavigationAndActions(Type popupType)
+        {
+            using (Form popup = CreatePopup(popupType))
+            {
+                int settings = 0, refresh = 0, dashboard = 0, autoStart = 0;
+                int update = 0, about = 0, exit = 0, displayRequests = 0, hidden = 0;
+                UsageDisplayMode requestedMode = UsageDisplayMode.FiveHours;
+                Subscribe(popup, "SettingsRequested", delegate { settings++; });
+                Subscribe(popup, "RefreshRequested", delegate { refresh++; });
+                Subscribe(popup, "DashboardRequested", delegate { dashboard++; });
+                Subscribe(popup, "AutoStartRequested", delegate { autoStart++; });
+                Subscribe(popup, "UpdateRequested", delegate { update++; });
+                Subscribe(popup, "AboutRequested", delegate { about++; });
+                Subscribe(popup, "ExitRequested", delegate { exit++; });
+                popupType.GetEvent("DisplayModeRequested").AddEventHandler(popup,
+                    new Action<UsageDisplayMode>(delegate(UsageDisplayMode mode)
+                    {
+                        displayRequests++;
+                        requestedMode = mode;
+                    }));
+
+                DateTime lastUpdated = DateTime.Now.AddMinutes(-7);
+                long reset = DateTimeOffset.Now.AddHours(2).ToUnixTimeSeconds();
+                RateLimitWindow fiveWindow = new RateLimitWindow("synthetic", "primary", 78, 300, reset);
+                RateLimitWindow sevenWindow = new RateLimitWindow("synthetic", "secondary", 64, 10080, reset);
+                Invoke(popup, "UpdateUsage", fiveWindow, sevenWindow, IconState.Normal, "", lastUpdated);
+                Rectangle workArea = Screen.PrimaryScreen.WorkingArea;
+                Rectangle anchor = new Rectangle(workArea.Right - 28, workArea.Bottom, 24, 24);
+                Invoke(popup, "ShowAt", anchor);
+                Application.DoEvents();
+                IntPtr handle = popup.Handle;
+                Rectangle bounds = popup.Bounds;
+                int formCount = Application.OpenForms.Count;
+                popup.VisibleChanged += delegate { if (!popup.Visible) hidden++; };
+                Click(popup, "SettingsButton");
+                Control settingsPage = Find(popup, "SettingsPage");
+                Control usagePage = Find(popup, "UsagePage");
+                Assert(settings == 1 && settingsPage.Visible && !usagePage.Visible &&
+                    settingsPage.Parent == usagePage.Parent,
+                    "settings must replace usage content within the same scroll host");
+                Assert(popup.Visible && popup.Handle == handle && popup.Bounds == bounds &&
+                    hidden == 0 && Application.OpenForms.Count == formCount,
+                    "settings navigation must preserve the original window without a transient hide");
+
+                Invoke(popup, "ApplyPalette", false);
+                Assert(settingsPage.BackColor == usagePage.BackColor &&
+                    settingsPage.BackColor == Color.FromArgb(238, 238, 239),
+                    "settings and usage pages must share the light Windows surface");
+                SavePreview(popup, "usage-popup-settings-synthetic.png");
+                Invoke(popup, "ApplyPalette", true);
+                Assert(settingsPage.BackColor == usagePage.BackColor &&
+                    settingsPage.BackColor == Color.FromArgb(41, 41, 41),
+                    "settings and usage pages must share the dark Windows surface");
+                SavePreview(popup, "usage-popup-settings-dark-synthetic.png");
+
+                Invoke(popup, "SetDisplayMode", UsageDisplayMode.FiveHours);
+                Control five = Find(popup, "FiveHourDisplayButton");
+                Control seven = Find(popup, "SevenDayDisplayButton");
+                Assert(IsAccessibilityChecked(five) && !IsAccessibilityChecked(seven),
+                    "persisted display selection must expose the actual checked accessibility state");
+                Color selected = five.BackColor, unselected = seven.BackColor;
+                Assert(selected != unselected, "the persisted display selection must be visible");
+                Click(popup, "SevenDayDisplayButton");
+                Assert(displayRequests == 1 && requestedMode == UsageDisplayMode.SevenDays &&
+                    five.BackColor == selected && seven.BackColor == unselected &&
+                    IsAccessibilityChecked(five) && !IsAccessibilityChecked(seven),
+                    "display selection must wait for successful persistence");
+                Invoke(popup, "SetDisplayMode", UsageDisplayMode.SevenDays);
+                Assert(seven.BackColor == selected && five.BackColor == unselected,
+                    "display selection must reflect the persisted mode");
+                Assert(IsAccessibilityChecked(seven) && !IsAccessibilityChecked(five),
+                    "persisted display change must move the checked accessibility state");
+                Click(popup, "FiveHourDisplayButton");
+                Assert(displayRequests == 2 && requestedMode == UsageDisplayMode.FiveHours &&
+                    seven.BackColor == selected && five.BackColor == unselected &&
+                    IsAccessibilityChecked(seven) && !IsAccessibilityChecked(five),
+                    "both display options must request rather than assume persistence");
+
+                Click(popup, "SettingsRefreshButton");
+                Invoke(popup, "SetRefreshing", true);
+                Click(popup, "SettingsRefreshButton");
+                Assert(refresh == 1 && !Find(popup, "SettingsRefreshButton").Enabled &&
+                    !Find(popup, "RefreshButton").Enabled,
+                    "pending refresh must disable refresh actions on both pages");
+                Invoke(popup, "SetRefreshing", false);
+                Assert(Find(popup, "SettingsRefreshButton").Enabled && Find(popup, "RefreshButton").Enabled,
+                    "completed refresh must enable refresh actions on both pages");
+
+                Invoke(popup, "SetAutoStart", false);
+                Control settingsAutoStart = Find(popup, "SettingsAutoStartButton");
+                Assert(!IsAccessibilityChecked(settingsAutoStart),
+                    "disabled persisted auto-start must expose an unchecked accessibility state");
+                Color autoStartOff = settingsAutoStart.BackColor;
+                Click(popup, "SettingsAutoStartButton");
+                Assert(autoStart == 1 && Find(popup, "SettingsAutoStartButton").BackColor == autoStartOff &&
+                    Find(popup, "AutoStartLabel").Text.Contains("끔") && !IsAccessibilityChecked(settingsAutoStart),
+                    "settings auto-start must wait for successful persistence");
+                Invoke(popup, "SetAutoStart", true);
+                Assert(Find(popup, "SettingsAutoStartButton").AccessibleDescription.Contains("켬") &&
+                    Find(popup, "AutoStartLabel").Text.Contains("켬"),
+                    "persisted auto-start must update both pages");
+                Assert(IsAccessibilityChecked(settingsAutoStart),
+                    "enabled persisted auto-start must expose a checked accessibility state");
+
+                Label settingsStatus = Find(popup, "SettingsStatusLabel") as Label;
+                Assert(settingsStatus != null && settingsStatus.Visible,
+                    "inline settings must visibly include the current usage status");
+                Invoke(popup, "UpdateUsage", fiveWindow, sevenWindow, IconState.Stale,
+                    "synthetic failure", lastUpdated);
+                Assert(settingsStatus.Text.Contains("실패") &&
+                    Find(popup, "SettingsFiveSummary").Text.Contains("78%") &&
+                    Find(popup, "SettingsSevenSummary").Text.Contains("64%"),
+                    "settings must show stale failure while retaining cached summary values");
+                Invoke(popup, "UpdateUsage", null, null, IconState.Error, "synthetic failure", null);
+                Assert(settingsStatus.Text.Contains("실패"),
+                    "settings must show a first-load usage failure without a cached snapshot");
+                Invoke(popup, "UpdateUsage", fiveWindow, sevenWindow, IconState.Normal, "", lastUpdated);
+                Assert(!settingsStatus.Text.Contains("실패") && settingsStatus.Text.Contains("분 전"),
+                    "successful usage must restore settings freshness and remove the old failure");
+                string successfulStatus = settingsStatus.Text;
+                Invoke(popup, "SetRefreshing", true);
+                Assert(settingsStatus.Text.Contains("갱신"),
+                    "settings status must reflect a pending usage refresh");
+                Invoke(popup, "SetRefreshing", false);
+                Assert(settingsStatus.Text == successfulStatus,
+                    "settings status must restore freshness when usage refresh completes");
+
+                Click(popup, "SettingsUpdateButton");
+                Invoke(popup, "SetUpdateStatus", true, "업데이트 확인 중...");
+                Click(popup, "SettingsUpdateButton");
+                Assert(update == 1 && !Find(popup, "SettingsUpdateButton").Enabled,
+                    "pending update must disable repeated update requests");
+                Invoke(popup, "SetUpdateStatus", false, "업데이트 확인");
+                Assert(Find(popup, "SettingsUpdateButton").Enabled,
+                    "completed update check must restore the update action");
+                Click(popup, "SettingsAboutButton");
+                Assert(about == 1 && popup.Visible, "settings about must invoke the application action");
+
+                Click(popup, "SettingsBackButton");
+                Assert(popup.Visible && popup.Handle == handle && popup.Bounds == bounds &&
+                    hidden == 0 && Application.OpenForms.Count == formCount &&
+                    usagePage.Visible && !settingsPage.Visible,
+                    "back navigation must preserve the original window without a transient hide");
+                Assert(Find(popup, "FiveHourValue").Text == "78%" &&
+                    Find(popup, "SevenDayValue").Text == "64%" &&
+                    Find(popup, "AutoStartLabel").Text.Contains("켬"),
+                    "returning to usage must preserve cached values and persisted settings");
+                Invoke(popup, "ShowSettings");
+                Click(popup, "SettingsDashboardButton");
+                Assert(dashboard == 1 && !popup.Visible, "settings dashboard action must dismiss the flyout");
+                Invoke(popup, "ShowSettingsAt", anchor);
+                Assert(popup.Visible && popup.Handle == handle && settingsPage.Visible && !usagePage.Visible,
+                    "opening settings directly must reuse the same flyout window");
+                Click(popup, "SettingsExitButton");
+                Assert(exit == 1, "settings exit must invoke the application exit action");
             }
         }
 
@@ -211,6 +384,14 @@ namespace CodexUsageTray.Tests
                         Control settings = Find(popup, "SettingsButton");
                         Assert(settings.Right <= settings.Parent.ClientSize.Width,
                             "scaled settings button must fit narrow content");
+                        foreach (string name in new[] { "SettingsBackButton", "SettingsDashboardButton",
+                            "SettingsRefreshButton", "FiveHourDisplayButton", "SevenDayDisplayButton",
+                            "SettingsAutoStartButton", "SettingsUpdateButton", "SettingsAboutButton", "SettingsExitButton" })
+                        {
+                            Control action = Find(popup, name);
+                            Assert(action.Width > 0 && action.Left >= 0 && action.Right <= action.Parent.ClientSize.Width,
+                                "scaled settings actions must fit narrow content");
+                        }
                     }
                 }
             }
@@ -251,10 +432,21 @@ namespace CodexUsageTray.Tests
                     .Invoke(popup, arguments);
                 Assert(!popup.Visible && keyboardDismissals == 1,
                     "Escape must dismiss flyout and request keyboard focus restoration");
+                Invoke(popup, "ShowSettingsAt", anchor);
+                popupType.GetMethod("ProcessCmdKey", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(popup, arguments);
+                Assert(!popup.Visible && keyboardDismissals == 2,
+                    "Escape must dismiss inline settings and request keyboard focus restoration");
                 Invoke(popup, "ShowAt", anchor);
                 Invoke(popup, "DismissForDeactivation", new Point(workArea.Left, workArea.Top));
                 Invoke(popup, "ToggleAt", anchor);
                 Assert(popup.Visible, "outside-click dismissal must allow immediate reopening");
+                Click(popup, "SettingsButton");
+                Invoke(popup, "DismissForDeactivation", new Point(workArea.Left, workArea.Top));
+                Assert(!popup.Visible, "outside-click deactivation must dismiss inline settings");
+                Invoke(popup, "ToggleAt", anchor);
+                Assert(popup.Visible && Find(popup, "UsagePage").Visible,
+                    "tray reopening after settings dismissal must return to usage");
                 popup.Close();
                 Assert(!popup.IsDisposed && !popup.Visible, "user dismissal must preserve the reusable flyout");
             }
@@ -284,14 +476,24 @@ namespace CodexUsageTray.Tests
                 SendMessage(icon.Handle, 0x8001, IntPtr.Zero, new IntPtr((1 << 16) | 0x0400));
                 Assert(popup.Visible && !popup.ShowInTaskbar,
                     "notification-area activation must open the popup without a taskbar app button");
+                IntPtr popupHandle = popup.Handle;
+                Rectangle popupBounds = popup.Bounds;
+                int formCount = Application.OpenForms.Count, hidden = 0;
+                popup.VisibleChanged += delegate { if (!popup.Visible) hidden++; };
+                Click(popup, "SettingsButton");
+                Assert(popup.Visible && popup.Handle == popupHandle && popup.Bounds == popupBounds &&
+                    hidden == 0 && Application.OpenForms.Count == formCount && Find(popup, "SettingsPage").Visible,
+                    "application settings gear must navigate within the same popup window");
                 popup.Close();
                 Assert(!popup.IsDisposed && !popup.Visible && !exited,
                     "closing the popup must keep the tray application running");
-                ContextMenuStrip menu = (ContextMenuStrip)contextType.GetField("_menu",
-                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(context);
-                ((ToolStripMenuItem)menu.Items["ExitItem"]).PerformClick();
+                SendMessage(icon.Handle, 0x8001, IntPtr.Zero, new IntPtr((1 << 16) | 0x007B));
+                Assert(popup.Visible && popup.Handle == popupHandle && !popup.ShowInTaskbar &&
+                    Find(popup, "SettingsPage").Visible && Application.OpenForms.Count == formCount,
+                    "tray context action must open settings inside the same popup window");
+                ((Button)Find(popup, "SettingsExitButton")).PerformClick();
                 Assert(exited && popup.IsDisposed && Shell_NotifyIconGetRect(ref identifier, out rectangle) != 0,
-                    "exit menu must stop the application and remove its notification-area icon");
+                    "settings exit must stop the application and remove its notification-area icon");
             }
         }
 
@@ -322,6 +524,11 @@ namespace CodexUsageTray.Tests
         {
             ((Button)Find(popup, name)).PerformClick();
             Application.DoEvents();
+        }
+
+        private static bool IsAccessibilityChecked(Control control)
+        {
+            return (control.AccessibilityObject.State & AccessibleStates.Checked) != AccessibleStates.None;
         }
 
         private static void SavePreview(Form popup, string fileName)
